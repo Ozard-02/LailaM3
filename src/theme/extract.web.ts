@@ -1,0 +1,1 @@
+export { extractPaletteFromUrl } from './palette';
