@@ -2,17 +2,14 @@
 
 Repeatable profiler for the Library's offset pagination and grid rendering.
 
-## Current priority — 2026-11-06
+## What it measures
 
-No new features. The current pass is an incremental refactor/efficiency review:
-measure first, keep only changes with a measurable win, and do not attempt a
-full rewrite. Record before/after numbers here for:
+Before/after numbers for:
 
 - web export size and startup/hydration time;
 - library grid timings, request counts and JS heap;
 - player/queue open and scroll cost;
-- Android cold start, background playback and memory;
-- any network/storage work removed or consolidated.
+- Android cold start, background playback and memory.
 
 ## Refactor baseline — 2026-11-06 (before changes)
 

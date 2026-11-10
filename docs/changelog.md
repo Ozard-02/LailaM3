@@ -6,8 +6,8 @@ Dated implementation history. Current status and priorities live in
 ## 2026-11-10
 
 - Project licensed under MIT. The public repository starts from the local Media3
-  engine; `@rntp/player` is no longer a dependency. Device validation still runs
-  against the matrix in `docs/audio-engine-comparison.md`.
+  engine; `@rntp/player` is no longer a dependency. Device validation is tracked
+  in `docs/testing.md`.
 - Web/tablet navigation is a 76 px icon rail: larger 56 px target buttons and 26 px
   icons, no app name/brand and no server card. Safe-area padding keeps the first
   icon below the tablet status bar.

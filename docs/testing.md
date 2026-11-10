@@ -15,14 +15,14 @@ npm run test:e2e:all  # full desktop × mobile matrix
 npm run build:web     # production web export
 ```
 
-## Current baseline — 2026-11-09
+## Current baseline — 2026-11-10
 
-- **116 unit tests** in 20 files.
+- **121 unit tests** in 21 files.
 - **63 default E2E checks**: 49 Chromium desktop, 13 mobile checks and one
   Firefox seek check.
 - `FULL_E2E=1` was not re-measured after the queue-trash pass.
 - Typecheck and lint are clean; the web export builds.
-- Android release builds; device install pending for the queue-trash pass.
+- Android release builds; the Media3 device matrix is pending.
 
 ## Unit coverage
 
@@ -58,7 +58,8 @@ Playwright runs against the bundled mock server; it never holds real credentials
 | AAC | Verified | Best effort | Pending |
 | Ogg/Opus | Verified | Pending | Pending |
 
-Android results are user-confirmed on device. Web codecs are still a manual
+Android codec results were confirmed on the previous RNTP engine. Re-run them on
+the Media3 module before treating them as current. Web codecs are still a manual
 matrix; do not claim full web codec support until it is run.
 
 ## Browser matrix
@@ -86,7 +87,7 @@ matrix; do not claim full web codec support until it is run.
 
 ## Device passes
 
-Confirmed on the phone and tablet:
+Confirmed on the device with the previous RNTP engine:
 
 - lock-screen transport and Android notification controls;
 - task-removal stop;
@@ -94,10 +95,17 @@ Confirmed on the phone and tablet:
 - Wi-Fi ↔ cellular server switching;
 - Android codec matrix.
 
-Still pending:
+Still pending for the Media3 engine:
+
+- notification, lock screen and Bluetooth controls;
+- audio focus and becoming-noisy;
+- gapless playback;
+- Android codec matrix re-run;
+- task-removal stop and offline restart.
+
+Still pending overall:
 
 - real DLNA speaker/TV;
-- gapless playback;
 - multi-GB download index;
 - full screen-reader and contrast pass;
 - real-Navidrome web codec/browser matrix.

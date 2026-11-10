@@ -4,28 +4,7 @@ Laila can hold several addresses for the **same library**: home Wi-Fi, cellular,
 or a public reverse proxy. It switches automatically and keeps downloads valid
 across addresses.
 
-This mirrors the feature in `the previous prototype` (`app/contexts/networkAutoSwitch.js`,
-`app/screens/Settings/AddServer.js`, `app/utils/downloadManager.native.js`).
-
-## What the previous prototype did
-
-- Each saved server (`settings.servers[]`) had an optional `network`:
-  - a Wi-Fi SSID, or
-  - the sentinel `__cellular__`.
-- On every `NetInfo` change and app resume, `decide()`:
-  - on cellular, picked the server bound to `__cellular__`;
-  - on Wi-Fi, picked the server whose `network` matched the lowercased SSID;
-  - if leaving a bound network, restored the last unbound server (`lastFallback`)
-    or any unbound server.
-- `Player.switchServer(server)` re-pointed the active config.
-- The download index was keyed by **song id**, not by server URL. So a download
-  done on the LAN address still counted as downloaded on the public/cellular
-  address of the same library.
-- Queued downloads were re-pointed to the new address (`repointQueued`); in-flight
-  downloads kept their URL because the bytes are the same library. This avoided
-  throwing away partial downloads.
-
-## What Laila does
+## How it works
 
 - `ServerConfig` has optional `name` and `network` (`SSID` or `__cellular__`).
 - `useAuthStore` keeps `servers[]`, the active `server`, and a persisted
