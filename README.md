@@ -253,6 +253,7 @@ app / components / stores
 | [`docs/accessibility.md`](docs/accessibility.md) | Keyboard and screen-reader notes |
 | [`docs/dlna.md`](docs/dlna.md) | DLNA/UPnP discovery and casting |
 | [`docs/server-switching.md`](docs/server-switching.md) | Wi-Fi/cellular server instances |
+| [`CONTRIBUTORS.md`](CONTRIBUTORS.md) | People and tools that shaped Laila |
 
 ## Contributing
 
@@ -278,3 +279,5 @@ Apache-2.0.
   presentation ideas that shaped the interface.
 - The Segue protocol and hub authors, for the device-handoff model.
 - The Expo, React Native, Reanimated and React Native Web communities.
+- DeepSeek and OpenCode, for AI pair-programming and agent tooling during
+  development.
