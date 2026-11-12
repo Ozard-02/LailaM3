@@ -42,10 +42,10 @@ export function toSegueState(
   };
 
   if (queue.shuffle && queue.originalQueue) {
-    const order = queue.queue.map((track) => {
-      const at = queue.originalQueue?.findIndex((item) => item.id === track.id) ?? -1;
-      return at;
-    });
+    // O(n) instead of O(n²): index the original order once.
+    const positions = new Map<string, number>();
+    queue.originalQueue.forEach((item, at) => positions.set(item.id, at));
+    const order = queue.queue.map((track) => positions.get(track.id) ?? -1);
     if (order.every((value) => value >= 0)) state.order = order;
   }
 

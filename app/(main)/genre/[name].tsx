@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import { Play } from '@/ui/icons';
 import { StyleSheet, View } from 'react-native';
@@ -21,7 +22,10 @@ export default function GenreScreen() {
   const playTracks = usePlayerStore((state) => state.playTracks);
   const offline = useEffectiveOffline();
   const offlineIndex = useOfflineStore((state) => state.index);
-  const data = offline ? offlineTracksByGenre(offlineIndex, genre) : (songs.data ?? []);
+  const data = useMemo(
+    () => (offline ? offlineTracksByGenre(offlineIndex, genre) : (songs.data ?? [])),
+    [offline, offlineIndex, genre, songs.data],
+  );
 
   return (
     <Screen>

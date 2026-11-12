@@ -28,7 +28,7 @@ export interface OfflineFiles {
   }): OfflineDownloadTask;
   remove(trackId: string, extension: string, uri?: string): Promise<void>;
   exists(trackId: string, extension: string): Promise<boolean>;
-  /** Check an absolute file URI, bypassing sanitised name reconstruction. */
+  /** Direct check of a persisted URI; the listing can miss older paths. */
   existsAt(uri: string): Promise<boolean>;
   sizeAt(uri: string): Promise<number>;
   /** Free bytes on the download volume, or null when the platform cannot tell. */

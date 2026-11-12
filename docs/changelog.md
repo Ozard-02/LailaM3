@@ -3,6 +3,23 @@
 Dated implementation history. Current status and priorities live in
 `ROADMAP.md`; test commands and matrices live in `docs/testing.md`.
 
+## 2026-11-12
+
+- Large-library/offline performance pass: offline index mutations are batched,
+  hydrate verifies downloads from one directory listing, persisted state writes
+  are coalesced, search haystacks are folded once per data change, quadratic
+  scans in queue/Segue/sheets are removed, library search and Downloads are
+  virtualised, and cover pruning runs once per batch.
+- Local download budget with an explicit Free up space action; downloaded
+  collections show their on-disk size.
+- Player/queue refinements: the queue opens on the playing track and is aligned
+  before the panel becomes visible; trashing a track removes it from the native
+  Media3 queue in place without restarting the current track; album header
+  spacing is corrected.
+- New `profile:core` harness (`tests/bench/core.bench.ts`) measures 20k-track
+  paths against targets; it stays out of the normal unit run.
+- Test baseline: 154 unit tests; 66 default E2E checks.
+
 ## 2026-11-10
 
 - Project licensed under MIT. The public repository starts from the local Media3

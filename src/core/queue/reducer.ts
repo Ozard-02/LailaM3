@@ -80,7 +80,7 @@ function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(index, length - 1));
 }
 
-function shuffled<T>(items: T[]): T[] {
+export function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -114,8 +114,10 @@ function advanceQueue(state: QueueState): QueueState {
   if (state.queue.length === 0) return state;
 
   if (state.upNext.length > 0) {
-    const [next, ...rest] = state.upNext;
+    const next = state.upNext[0];
     if (!next) return state;
+    // slice(1) avoids building an intermediate rest array on every advance.
+    const rest = state.upNext.slice(1);
     const insertAt = Math.min(state.index + 1, state.queue.length);
     const queue = [...state.queue];
     queue.splice(insertAt, 0, next);

@@ -3,7 +3,6 @@ import {
   startTransition,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -44,7 +43,19 @@ export interface Theme {
 
 const ThemeContext = createContext<Theme | null>(null);
 
+const PALETTE_CACHE_LIMIT = 120;
 const paletteCache = new Map<string, ArtworkPalette>();
+
+/** LRU touch: recent covers survive, old ones are evicted on write. */
+function rememberPalette(url: string, palette: ArtworkPalette): void {
+  paletteCache.delete(url);
+  paletteCache.set(url, palette);
+  while (paletteCache.size > PALETTE_CACHE_LIMIT) {
+    const oldest = paletteCache.keys().next().value;
+    if (oldest === undefined) break;
+    paletteCache.delete(oldest);
+  }
+}
 
 export function ThemeProvider({ children }: PropsWithChildren) {
   const scheme = useColorScheme();
@@ -67,6 +78,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       }
       const cached = paletteCache.get(url);
       if (cached) {
+        rememberPalette(url, cached);
         startTransition(() => {
           setArtwork(cached);
           setArtworkUrl(url);
@@ -76,7 +88,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       }
       void extractPaletteFromUrl(url).then((palette) => {
         if (activeUrl.current !== url) return;
-        paletteCache.set(url, palette);
+        rememberPalette(url, palette);
         // Palette extraction can land mid-gesture; keep that update interruptible.
         startTransition(() => {
           setArtwork(palette);
@@ -94,14 +106,6 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     setArtworkUrl(undefined);
     setIsArtwork(false);
   }, []);
-
-  useEffect(() => {
-    // Keep the cache bounded.
-    if (paletteCache.size > 120) {
-      const firstKey = paletteCache.keys().next().value;
-      if (firstKey) paletteCache.delete(firstKey);
-    }
-  }, [artwork]);
 
   const value = useMemo<Theme>(() => {
     const base = mode === 'light' ? lightColors : darkColors;

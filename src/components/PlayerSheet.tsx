@@ -8,7 +8,6 @@ import Animated, {
   useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
-  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import { MarqueeText } from '@/components/MarqueeText';
@@ -63,16 +62,7 @@ export function PlayerSheet({
   // UI thread so the overlay and the queue sheet swap in the same frame.
   const [queueOpen, setQueueOpen] = useState(false);
   const [settledAtOne, setSettledAtOne] = useState(false);
-  // Queue panel mounts once the player has come to rest and unmounts only
-  // after it is fully closed, so neither happens mid-animation.
-  const [queueReady, setQueueReady] = useState(false);
   const queueProgress = useSharedValue(0);
-  const detailsOn = useSharedValue(false);
-  const detailsOpacity = useSharedValue(0);
-  const surfaceVisible = useSharedValue(false);
-  const surfaceOpacity = useSharedValue(0);
-  const scrimVisible = useSharedValue(false);
-  const scrimOpacity = useSharedValue(0);
 
   const wasSettled = useSharedValue(false);
   const wasParked = useSharedValue(true);
@@ -80,53 +70,29 @@ export function PlayerSheet({
 
   useWebDialog(open, sheetRef, '[aria-label="Close player"]');
 
+  // Only the two rest points drive React state. Every visual value below is a
+  // pure function of `progress`, so the close retraces the open exactly and
+  // there is no second animation to keep in sync.
   useAnimatedReaction(
     () => progress.get(),
     (p) => {
-      // React state flips only at the two rest points (fully open / fully
-      // parked), never mid-flight: a React commit during the close spring
-      // costs frames. "Settled" stays true through the close and resets once
-      // parked, so closing triggers no render at all.
+      if (p <= 0.001) {
+        // Parked is the single source of truth for "not interactive": always
+        // reset, even if a close path skipped the settle flag. A stale `true`
+        // here leaves an invisible full-screen overlay on top of the app, and
+        // taps meant for the pill or the tabs hit play/pause instead.
+        if (!wasParked.get()) {
+          wasParked.set(true);
+          runOnJS(setSettledAtOne)(false);
+        }
+        wasSettled.set(false);
+        return;
+      }
+      wasParked.set(false);
       if (p >= 0.995 && !wasSettled.get()) {
         wasSettled.set(true);
-        wasParked.set(false);
         runOnJS(setSettledAtOne)(true);
-        runOnJS(setQueueReady)(true);
       }
-      if (p <= 0.001 && !wasParked.get()) {
-        wasParked.set(true);
-        if (wasSettled.get()) {
-          wasSettled.set(false);
-          runOnJS(setSettledAtOne)(false);
-          runOnJS(setQueueReady)(false);
-        }
-      }
-      if (p > 0.001) wasParked.set(false);
-
-      const surfaceNow = p > 0.02;
-      if (surfaceNow !== surfaceVisible.get()) {
-        surfaceVisible.set(surfaceNow);
-        surfaceOpacity.set(withTiming(surfaceNow ? 1 : 0, { duration: 140 }));
-      }
-      const scrimNow = p > 0.04;
-      if (scrimNow !== scrimVisible.get()) {
-        scrimVisible.set(scrimNow);
-        scrimOpacity.set(withTiming(scrimNow ? 0.55 : 0, { duration: 140 }));
-      }
-      if (p <= 0.001) {
-        surfaceOpacity.set(0);
-        scrimOpacity.set(0);
-      }
-
-      // One threshold and one duration in both directions: the inverse morph
-      // is the time-reverse of the open, not a faster close.
-      const next = p > 0.55;
-      if (next !== detailsOn.get()) {
-        detailsOn.set(next);
-        detailsOpacity.set(withTiming(next ? 1 : 0, { duration: 140 }));
-      }
-      if (p >= 0.995) detailsOpacity.set(1);
-      if (p <= 0.001) detailsOpacity.set(0);
     },
   );
 
@@ -183,7 +149,7 @@ export function PlayerSheet({
   const backgroundStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.get()));
     return {
-      opacity: surfaceOpacity.get(),
+      opacity: range(p, 0.02, 0.1),
       transform: [
         { translateX: (pillCx - width / 2) * (1 - p) },
         { translateY: (pillCy - height / 2) * (1 - p) },
@@ -195,26 +161,36 @@ export function PlayerSheet({
 
   const backgroundSquareStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.get()));
-    return { opacity: surfaceOpacity.get() * range(p, 0.88, 1) };
+    return { opacity: range(p, 0.02, 0.1) * range(p, 0.88, 1) };
   });
 
-  const scrimStyle = useAnimatedStyle(() => ({
-    opacity: scrimOpacity.get(),
-  }));
+  const scrimStyle = useAnimatedStyle(() => {
+    const p = Math.max(0, Math.min(1, progress.get()));
+    return { opacity: 0.55 * range(p, 0.04, 0.15) };
+  });
 
-  const expandedStyle = useAnimatedStyle(() => ({
-    opacity: detailsOpacity.get(),
-  }));
+  const expandedStyle = useAnimatedStyle(() => {
+    const p = Math.max(0, Math.min(1, progress.get()));
+    return { opacity: range(p, 0.55, 0.85) };
+  });
 
   const art = rects.art;
   const play = rects.play;
   const titleRect = rects.title;
   const artSize = art ? Math.round(art.width) : 0;
-  const { gesture: coverGesture, swipeX: artSwipeX } = useCoverSwipe({
+  const {
+    gesture: coverGesture,
+    swipeX: artSwipeX,
+    swiped: coverSwiped,
+  } = useCoverSwipe({
     distance: width,
     coverSize: artSize || undefined,
     enabled: settledAtOne,
   });
+  const openLyrics = useCallback(() => {
+    if (coverSwiped) return;
+    router.push('/lyrics');
+  }, [coverSwiped, router]);
 
   // A close can start from Escape, the close button, a resize or the mini-player
   // gesture; none of those go through handleClose. Reset the overlay state as
@@ -226,10 +202,11 @@ export function PlayerSheet({
     (p) => {
       if (p < 0.99 && !closeStarted.get()) {
         closeStarted.set(true);
-        wasSettled.set(false);
         queueProgress.set(0);
         artSwipeX.set(0);
-        runOnJS(setSettledAtOne)(false);
+        // No React commit at the start of the close: `settledAtOne` flips once
+        // the overlay is parked, in the reaction above. The only state that
+        // must go now is the queue sheet, which is not on the close path.
         runOnJS(setQueueOpen)(false);
       } else if (p >= 0.995) {
         closeStarted.set(false);
@@ -394,7 +371,6 @@ export function PlayerSheet({
       >
         <PlayerScreen
           active={open}
-          queueReady={queueReady}
           onClose={handleClose}
           onOpenLibrary={openLibrary}
           hideShared={morph}
@@ -423,7 +399,7 @@ export function PlayerSheet({
                 <PressableScale
                   accessibilityRole="button"
                   accessibilityLabel="Album cover: tap for lyrics, swipe left or right for previous or next"
-                  onPress={() => router.push('/lyrics')}
+                  onPress={openLyrics}
                   haptic={false}
                 >
                   <Artwork key={track.id} coverArt={track.coverArt} size={artSize} radius={10} />

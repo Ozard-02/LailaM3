@@ -1,25 +1,32 @@
+import { createCoalescedJSONStorage } from '@/adapters/storage/coalesced';
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import type { Album, Playlist, Track } from '@/core/models';
 import {
   addCollection,
   addCover,
-  addDownloadedTrack,
+  addDownloadedTracks,
   coverStillUsed,
+  isRecoveredEntry,
   mergeCollectionTracks,
+  mergeRecoveredMetadata,
   downloadSizeError,
+  planEviction,
   emptyOfflineIndex,
   reconcileCollection,
   recoverOfflineIndex,
   restoreManifestTracks,
+  usedCovers,
   isDownloaded,
   localUri as localUriFromIndex,
   removeCollection as removeCollectionFromIndex,
   removeCollectionTrack,
   removeDownloadedTrack,
+  removeDownloadedTracks,
   type DownloadEntry,
   type DownloadQuality,
   type DownloadStatus,
+  type DownloadedTrackInput,
   type OfflineIndex,
   type OfflineTrack,
 } from '@/core/offline';
@@ -55,6 +62,8 @@ interface OfflineState {
   removeTrack: (trackId: string) => Promise<void>;
   removeCollection: (collectionId: string) => Promise<void>;
   removeCollectionTrack: (collectionId: string, trackId: string) => Promise<void>;
+  /** Drop the oldest downloads until the local index fits the budget. */
+  freeUpSpace: (keepTrackIds?: ReadonlySet<string>) => Promise<number>;
   clearAll: () => Promise<void>;
   setOfflineMode: (enabled: boolean) => void;
   setNetworkOffline: (offline: boolean) => void;
@@ -62,15 +71,30 @@ interface OfflineState {
   isDownloaded: (trackId: string) => boolean;
 }
 
-const storage = createJSONStorage(() => ({
-  getItem: (name) => appStore.get(name),
-  setItem: (name, value) => appStore.set(name, value),
-  removeItem: (name) => appStore.remove(name),
-}));
+type OfflinePersisted = { index: OfflineIndex; offlineMode: boolean };
+
+const storage = createCoalescedJSONStorage<OfflinePersisted>(
+  {
+    getItem: (name) => appStore.get(name),
+    setItem: (name, value) => appStore.set(name, value),
+    removeItem: (name) => appStore.remove(name),
+  },
+  {
+    // The index is 8 MB at 20k tracks. Writing it on every completed download
+    // blocked the JS thread for ~59 ms; batch a second's worth of changes. The
+    // per-download sidecar manifests are still written immediately, so a hard
+    // kill loses at most the debounce window and hydrate restores from them.
+    delayMs: 1_000,
+    changed: (next, previous) =>
+      next.index !== previous.index || next.offlineMode !== previous.offlineMode,
+  },
+);
 
 const tasks = new Map<string, OfflineDownloadTask>();
 const speedSamples = new Map<string, { bytes: number; at: number; speed: number }>();
 const coverPending = new Set<string>();
+/** Coalesce completed downloads before copying the offline index. */
+const DOWNLOAD_FLUSH_MS = 250;
 
 function extensionFor(track: Track, quality: DownloadQuality): string {
   if (quality === 'opus') return 'opus';
@@ -140,6 +164,36 @@ function setProgress(trackId: string, progress: number, bytesWritten: number, to
 export const useOfflineStore = create<OfflineState>()(
   persist(
     (set, get) => {
+      // Completion buffer: adding each track to the index copied the whole
+      // tracks record (O(T), ~54 ms at 20k). Batch a short window and copy once.
+      let pendingTracks: DownloadedTrackInput[] = [];
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const flushDownloadedTracks = () => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        if (pendingTracks.length === 0) return;
+        const entries = pendingTracks;
+        pendingTracks = [];
+        set((state) => ({ index: addDownloadedTracks(state.index, entries) }));
+      };
+
+      const queueDownloadedTrack = (entry: DownloadedTrackInput) => {
+        pendingTracks.push(entry);
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          flushDownloadedTracks();
+        }, DOWNLOAD_FLUSH_MS);
+      };
+
+      const dropPendingTracks = (trackIds: ReadonlySet<string>) => {
+        if (pendingTracks.length === 0) return;
+        pendingTracks = pendingTracks.filter((entry) => !trackIds.has(entry.track.id));
+      };
+
       const ensureCover = async (coverArt: string | undefined) => {
         if (!coverArt || coverPending.has(coverArt) || get().index.covers?.[coverArt]) return;
         const server = useAuthStore.getState().server;
@@ -160,8 +214,8 @@ export const useOfflineStore = create<OfflineState>()(
         }
       };
 
-      const rememberManifest = async (trackId: string) => {
-        const stored = get().index.tracks[trackId];
+      const rememberManifest = async (trackId: string, entry?: OfflineTrack) => {
+        const stored = entry ?? get().index.tracks[trackId];
         if (!stored) return;
         try {
           await offlineFiles.saveManifest(stored);
@@ -177,6 +231,26 @@ export const useOfflineStore = create<OfflineState>()(
         set((state) => {
           const covers = { ...(state.index.covers ?? {}) };
           delete covers[coverArt];
+          return { index: { ...state.index, covers } };
+        });
+      };
+
+      /**
+       * Batch prune: resolve the used-cover set once instead of scanning every
+       * track per candidate (O(candidates × tracks) before).
+       */
+      const pruneCovers = async (candidates: Iterable<string | undefined>) => {
+        const used = usedCovers(get().index);
+        const removed: string[] = [];
+        for (const coverArt of new Set(candidates)) {
+          if (!coverArt || used.has(coverArt)) continue;
+          await offlineFiles.removeCover(coverArt);
+          removed.push(coverArt);
+        }
+        if (removed.length === 0) return;
+        set((state) => {
+          const covers = { ...(state.index.covers ?? {}) };
+          for (const coverArt of removed) delete covers[coverArt];
           return { index: { ...state.index, covers } };
         });
       };
@@ -217,8 +291,14 @@ export const useOfflineStore = create<OfflineState>()(
             }
             speedSamples.delete(track.id);
             useDownloadProgressStore.getState().clear(track.id);
+            const stored: OfflineTrack = {
+              track,
+              fileUri: file.uri,
+              size: file.size,
+              extension,
+              downloadedAt: Date.now(),
+            };
             set((state) => ({
-              index: addDownloadedTrack(state.index, track, file.uri, file.size, extension),
               downloads: {
                 ...state.downloads,
                 [track.id]: {
@@ -230,7 +310,8 @@ export const useOfflineStore = create<OfflineState>()(
                 },
               },
             }));
-            await rememberManifest(track.id);
+            queueDownloadedTrack(stored);
+            await rememberManifest(track.id, stored);
             void ensureCover(track.coverArt);
           })
           .catch((error) => {
@@ -314,28 +395,55 @@ export const useOfflineStore = create<OfflineState>()(
           };
           let index = normalized;
 
+          // One listing per directory: the size comes with it, so hydration
+          // does not run two or three native stat calls per download. The
+          // listing is only a fast path: a persisted URI that is absent there
+          // is verified directly before it is treated as deleted, otherwise a
+          // path-format difference would wipe the whole index.
+          const audioFiles = await offlineFiles.listAudio();
+          const audioByUri = new Map(audioFiles.map((file) => [file.uri, file.size]));
+          const audioByName = new Map(audioFiles.map((file) => [file.name, file.size]));
+          const verifyFileSize = async (uri: string): Promise<number | undefined> => {
+            const listed = audioByUri.get(uri);
+            if (listed !== undefined) return listed;
+            const name = decodeURIComponent(uri.slice(uri.lastIndexOf('/') + 1));
+            const byName = audioByName.get(name);
+            if (byName !== undefined) return byName;
+            if (!(await offlineFiles.existsAt(uri))) return undefined;
+            return offlineFiles.sizeAt(uri);
+          };
+
           // Sidecar manifests keep the original track id and metadata even when
           // the file name was sanitised or the index was lost.
           const manifests = await offlineFiles.listManifests();
           const validManifests: OfflineTrack[] = [];
           for (const manifest of manifests) {
-            const exists = await offlineFiles.existsAt(manifest.fileUri);
-            const size = exists ? await offlineFiles.sizeAt(manifest.fileUri) : 0;
-            if (exists && (manifest.size <= 0 || size === manifest.size)) {
+            const size = await verifyFileSize(manifest.fileUri);
+            // `undefined` means the file is gone. Only a confirmed size
+            // mismatch deletes it; a zero-length stat can mean "unreadable".
+            if (size !== undefined && (manifest.size <= 0 || size === manifest.size)) {
               validManifests.push(manifest);
+            } else if (size !== undefined) {
+              logger.warn('Removing truncated download manifest', {
+                trackId: manifest.track.id,
+                expected: manifest.size,
+                actual: size,
+              });
+              await offlineFiles.remove(manifest.track.id, manifest.extension, manifest.fileUri);
+              await offlineFiles.removeManifest(manifest.track.id);
             } else {
-              if (exists) {
-                logger.warn('Removing truncated download manifest', {
-                  trackId: manifest.track.id,
-                  expected: manifest.size,
-                  actual: size,
-                });
-                await offlineFiles.remove(manifest.track.id, manifest.extension, manifest.fileUri);
-              }
               await offlineFiles.removeManifest(manifest.track.id);
             }
           }
           index = restoreManifestTracks(index, validManifests);
+          // Entries rebuilt from file names get their metadata back from the
+          // sidecars; normal entries are left untouched.
+          index = mergeRecoveredMetadata(index, validManifests);
+          logger.warn('Offline hydrate audit', {
+            tracks: Object.keys(index.tracks).length,
+            recoveredLeft: Object.values(index.tracks).filter(isRecoveredEntry).length,
+            collections: Object.keys(index.collections).length,
+          });
 
           // Recover legacy audio without a manifest (or all audio when the
           // index and manifests are both empty). Files already represented by
@@ -345,24 +453,23 @@ export const useOfflineStore = create<OfflineState>()(
             ...validManifests.map((manifest) => manifest.fileUri),
             ...Object.values(index.tracks).map((entry) => entry.fileUri),
           ]);
-          const audioFiles = (await offlineFiles.listAudio()).filter(
-            (file) => !knownUris.has(file.uri),
-          );
-          if (audioFiles.length) index = recoverOfflineIndex(index, audioFiles);
+          const unrecovered = audioFiles.filter((file) => !knownUris.has(file.uri));
+          if (unrecovered.length) index = recoverOfflineIndex(index, unrecovered);
 
+          const coverFiles = await offlineFiles.listCovers();
           if (Object.keys(index.covers).length === 0) {
-            index = recoverOfflineIndex(index, [], await offlineFiles.listCovers());
+            index = recoverOfflineIndex(index, [], coverFiles);
           }
+          const coverUris = new Set(coverFiles.map((file) => file.uri));
 
           // Drop index entries whose file disappeared (cache clear, OS cleanup).
           const missing: string[] = [];
           for (const [trackId, entry] of Object.entries(index.tracks)) {
             // The manifest/index URI is authoritative; recomputing the name
             // would fail for ids that safeName() had to sanitise.
-            const exists = await offlineFiles.existsAt(entry.fileUri);
-            const size = exists ? await offlineFiles.sizeAt(entry.fileUri) : 0;
-            if (!exists || (entry.size > 0 && size !== entry.size)) {
-              if (exists) {
+            const size = await verifyFileSize(entry.fileUri);
+            if (size === undefined || (entry.size > 0 && size !== entry.size)) {
+              if (size !== undefined) {
                 logger.warn('Removing truncated download', {
                   trackId,
                   expected: entry.size,
@@ -375,15 +482,20 @@ export const useOfflineStore = create<OfflineState>()(
           }
           const missingCovers: string[] = [];
           for (const coverArt of Object.keys(index.covers)) {
-            const exists = await offlineFiles.coverExists(coverArt);
-            if (!exists) missingCovers.push(coverArt);
+            const uri = index.covers[coverArt]?.fileUri;
+            if (uri && coverUris.has(uri)) continue;
+            if (uri && (await offlineFiles.existsAt(uri))) continue;
+            if (!uri && (await offlineFiles.coverExists(coverArt))) continue;
+            missingCovers.push(coverArt);
           }
           if (missing.length || missingCovers.length || index !== normalized) {
             set(() => {
               const covers = { ...(index.covers ?? {}) };
               for (const coverArt of missingCovers) delete covers[coverArt];
-              let next = { ...index, covers };
-              for (const trackId of missing) next = removeDownloadedTrack(next, trackId);
+              const next = {
+                ...removeDownloadedTracks(index, missing),
+                covers,
+              };
               return { index: next };
             });
           }
@@ -467,7 +579,7 @@ export const useOfflineStore = create<OfflineState>()(
           if (existing.coverArt && existing.coverArt !== plan.index.collections[playlist.id]?.coverArt) {
             removedCovers.add(existing.coverArt);
           }
-          for (const coverArt of removedCovers) await pruneCover(coverArt);
+          await pruneCovers(removedCovers);
           void ensureCover(plan.index.collections[playlist.id]?.coverArt);
           queueTracks(songs);
         },
@@ -510,8 +622,14 @@ export const useOfflineStore = create<OfflineState>()(
               }
               speedSamples.delete(trackId);
               useDownloadProgressStore.getState().clear(trackId);
+              const stored: OfflineTrack = {
+                track: entry.track,
+                fileUri: file.uri,
+                size: file.size,
+                extension,
+                downloadedAt: Date.now(),
+              };
               set((state) => ({
-                index: addDownloadedTrack(state.index, entry.track, file.uri, file.size, extension),
                 downloads: {
                   ...state.downloads,
                   [trackId]: {
@@ -523,7 +641,8 @@ export const useOfflineStore = create<OfflineState>()(
                   },
                 },
               }));
-              await rememberManifest(trackId);
+              queueDownloadedTrack(stored);
+              await rememberManifest(trackId, stored);
               void ensureCover(entry.track.coverArt);
             })
             .catch((error) => {
@@ -544,6 +663,7 @@ export const useOfflineStore = create<OfflineState>()(
         },
 
         removeTrack: async (trackId) => {
+          dropPendingTracks(new Set([trackId]));
           const entry = get().index.tracks[trackId];
           if (entry) await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
           useDownloadProgressStore.getState().clear(trackId);
@@ -558,6 +678,7 @@ export const useOfflineStore = create<OfflineState>()(
         removeCollection: async (collectionId) => {
           const collection = get().index.collections[collectionId];
           if (!collection) return;
+          dropPendingTracks(new Set(collection.trackIds));
           const nextIndex = removeCollectionFromIndex(get().index, collectionId);
           for (const trackId of collection.trackIds) {
             if (!nextIndex.tracks[trackId]) {
@@ -573,13 +694,14 @@ export const useOfflineStore = create<OfflineState>()(
             }
             return { index: nextIndex, downloads };
           });
-          await pruneCover(collection.coverArt);
-          for (const trackId of collection.trackIds) {
-            await pruneCover(get().index.tracks[trackId]?.track.coverArt);
-          }
+          await pruneCovers([
+            collection.coverArt,
+            ...collection.trackIds.map((trackId) => get().index.tracks[trackId]?.track.coverArt),
+          ]);
         },
 
         removeCollectionTrack: async (collectionId, trackId) => {
+          dropPendingTracks(new Set([trackId]));
           const entry = get().index.tracks[trackId];
           const nextIndex = removeCollectionTrack(get().index, collectionId, trackId);
           if (entry && !nextIndex.tracks[trackId]) {
@@ -594,7 +716,40 @@ export const useOfflineStore = create<OfflineState>()(
           if (!nextIndex.tracks[trackId]) await pruneCover(entry?.track.coverArt);
         },
 
+        freeUpSpace: async (keepTrackIds = new Set()) => {
+          const limit = useSettingsStore.getState().offlineLimitBytes;
+          if (!limit) return 0;
+          const current = get().index;
+          const plan = planEviction(current, limit, keepTrackIds);
+          if (plan.trackIds.length === 0) return 0;
+
+          for (const trackId of plan.trackIds) {
+            const entry = current.tracks[trackId];
+            if (!entry) continue;
+            try {
+              await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+            } catch (error) {
+              logger.warn('Could not remove download for space', { trackId, error });
+            }
+            useDownloadProgressStore.getState().clear(trackId);
+          }
+          set((state) => {
+            const downloads = { ...state.downloads };
+            for (const trackId of plan.trackIds) delete downloads[trackId];
+            return { index: removeDownloadedTracks(state.index, plan.trackIds), downloads };
+          });
+          await pruneCovers(
+            plan.trackIds.map((trackId) => current.tracks[trackId]?.track.coverArt),
+          );
+          return plan.freedBytes;
+        },
+
         clearAll: async () => {
+          if (flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = null;
+          }
+          pendingTracks = [];
           for (const [trackId, entry] of Object.entries(get().index.tracks)) {
             await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
           }

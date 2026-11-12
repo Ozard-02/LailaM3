@@ -6,6 +6,7 @@ import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { getAlbum } from '@/core/subsonic/client';
 import type { Album, Playlist } from '@/core/models';
 import { downloadedTracks, offlineAlbums, offlinePlaylists } from '@/core/offline';
+import { shuffled } from '@/core/queue/reducer';
 import { AlbumGrid } from '@/components/AlbumGrid';
 import { AlbumRow } from '@/components/AlbumRow';
 import { FavouriteCard } from '@/components/FavouriteCard';
@@ -73,14 +74,22 @@ export default function HomeScreen() {
   const pinnedAlbums = usePinsStore((state) => state.albums);
   const pinnedPlaylists = usePinsStore((state) => state.playlists);
   const favouritesPinned = usePinsStore((state) => state.favourites);
+  const offlineAlbumById = useMemo(
+    () => new Map(offlineAlbumList.map((album) => [album.id, album])),
+    [offlineAlbumList],
+  );
+  const offlinePlaylistById = useMemo(
+    () => new Map(offlinePlaylistList.map((playlist) => [playlist.id, playlist])),
+    [offlinePlaylistList],
+  );
   const pinnedAlbumData = offline
     ? pinnedAlbums
-        .map((album) => offlineAlbumList.find((item) => item.id === album.id))
+        .map((album) => offlineAlbumById.get(album.id))
         .filter((album): album is Album => Boolean(album))
     : pinnedAlbums;
   const pinnedPlaylistData = offline
     ? pinnedPlaylists
-        .map((playlist) => offlinePlaylistList.find((item) => item.id === playlist.id))
+        .map((playlist) => offlinePlaylistById.get(playlist.id))
         .filter((playlist): playlist is Playlist => Boolean(playlist))
     : pinnedPlaylists;
 
@@ -109,7 +118,7 @@ export default function HomeScreen() {
           setShuffleError('No downloaded songs to shuffle.');
           return;
         }
-        await playTracks([...tracks].sort(() => Math.random() - 0.5), 0);
+        await playTracks(shuffled(tracks), 0);
         return;
       }
       const started = await playRandom();

@@ -52,8 +52,11 @@ export function Artwork({
           contentFit="cover"
           transition={180}
           cachePolicy="memory-disk"
+          recyclingKey={coverArt}
           priority={priority}
           blurRadius={blurRadius}
+          // Native image dragging steals the pointer from swipe gestures.
+          draggable={false}
         />
       ) : (
         <View style={[styles.placeholder, { borderRadius }]}>

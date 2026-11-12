@@ -102,6 +102,37 @@ export function localUri(index: OfflineIndex, trackId: string): string | undefin
   return index.tracks[trackId]?.fileUri;
 }
 
+export interface DownloadedTrackInput {
+  track: Track;
+  fileUri: string;
+  size: number;
+  extension: string;
+}
+
+/**
+ * Batch insert: copies the tracks record once for the whole batch. Completion
+ * handlers should buffer entries and call this instead of copying per track
+ * (O(tracks × downloads) on large libraries).
+ */
+export function addDownloadedTracks(
+  index: OfflineIndex,
+  entries: readonly DownloadedTrackInput[],
+): OfflineIndex {
+  if (entries.length === 0) return index;
+  const tracks = { ...index.tracks };
+  const downloadedAt = Date.now();
+  for (const entry of entries) {
+    tracks[entry.track.id] = {
+      track: entry.track,
+      fileUri: entry.fileUri,
+      size: entry.size,
+      extension: entry.extension,
+      downloadedAt,
+    };
+  }
+  return { ...index, tracks };
+}
+
 export function addDownloadedTrack(
   index: OfflineIndex,
   track: Track,
@@ -109,30 +140,54 @@ export function addDownloadedTrack(
   size: number,
   extension: string,
 ): OfflineIndex {
-  return {
-    ...index,
-    tracks: {
-      ...index.tracks,
-      [track.id]: {
-        track,
-        fileUri,
-        size,
-        extension,
-        downloadedAt: Date.now(),
-      },
-    },
-  };
+  return addDownloadedTracks(index, [{ track, fileUri, size, extension }]);
 }
 
 export function removeDownloadedTrack(index: OfflineIndex, trackId: string): OfflineIndex {
-  const tracks = { ...index.tracks };
-  delete tracks[trackId];
+  return removeDownloadedTracks(index, [trackId]);
+}
+
+/**
+ * Batch removal. Copying the index once per track made deleting a downloaded
+ * album O(tracks × index size): 1.2 s for 100 tracks at 20k. Callers that
+ * remove many ids must use this instead of looping `removeDownloadedTrack`.
+ */
+export function removeDownloadedTracks(
+  index: OfflineIndex,
+  trackIds: readonly string[],
+): OfflineIndex {
+  if (trackIds.length === 0) return index;
+  const remove = new Set(trackIds);
+
+  let removedAny = false;
+  const tracks: Record<string, OfflineTrack> = {};
+  for (const [id, entry] of Object.entries(index.tracks)) {
+    if (remove.has(id)) {
+      removedAny = true;
+      continue;
+    }
+    tracks[id] = entry;
+  }
+  if (!removedAny) return index;
+
+  let collectionsChanged = false;
   const collections: Record<string, OfflineCollection> = {};
   for (const [id, collection] of Object.entries(index.collections)) {
-    const trackIds = collection.trackIds.filter((track) => track !== trackId);
-    if (trackIds.length > 0) collections[id] = { ...collection, trackIds };
+    const kept = collection.trackIds.filter((trackId) => !remove.has(trackId));
+    if (kept.length === collection.trackIds.length && kept.length > 0) {
+      collections[id] = collection;
+      continue;
+    }
+    collectionsChanged = true;
+    // An empty collection is dropped, as before.
+    if (kept.length > 0) collections[id] = { ...collection, trackIds: kept };
   }
-  return { ...index, tracks, collections };
+
+  return {
+    ...index,
+    tracks,
+    collections: collectionsChanged ? collections : index.collections,
+  };
 }
 
 export function addCollection(
@@ -179,23 +234,38 @@ export function recoverOfflineIndex(
   files: RecoveredFile[],
   covers: RecoveredFile[] = [],
 ): OfflineIndex {
-  let next = index;
+  let tracks: Record<string, OfflineTrack> | null = null;
+  let coverEntries: Record<string, OfflineCover> | null = null;
+  const at = Date.now();
   for (const file of files) {
     const dot = file.name.lastIndexOf('.');
     if (dot <= 0) continue;
     const id = file.name.slice(0, dot);
     const extension = file.name.slice(dot + 1).toLowerCase();
     if (!id || !extension) continue;
-    next = addDownloadedTrack(next, { id, title: id }, file.uri, file.size, extension);
+    if (!tracks) tracks = { ...index.tracks };
+    tracks[id] = {
+      track: { id, title: id },
+      fileUri: file.uri,
+      size: file.size,
+      extension,
+      downloadedAt: at,
+    };
   }
   for (const file of covers) {
     const dot = file.name.lastIndexOf('.');
     if (dot <= 0) continue;
     const id = file.name.slice(0, dot);
     if (!id) continue;
-    next = addCover(next, id, file.uri, file.size);
+    if (!coverEntries) coverEntries = { ...(index.covers ?? {}) };
+    coverEntries[id] = { fileUri: file.uri, size: file.size, downloadedAt: at };
   }
-  return next;
+  if (!tracks && !coverEntries) return index;
+  return {
+    ...index,
+    tracks: tracks ?? index.tracks,
+    covers: coverEntries ?? index.covers,
+  };
 }
 
 /**
@@ -207,15 +277,46 @@ export function restoreManifestTracks(
   index: OfflineIndex,
   manifests: OfflineTrack[],
 ): OfflineIndex {
-  let next = index;
+  let tracks: Record<string, OfflineTrack> | null = null;
   for (const manifest of manifests) {
-    if (next.tracks[manifest.track.id]) continue;
-    next = {
-      ...next,
-      tracks: { ...next.tracks, [manifest.track.id]: manifest },
-    };
+    if ((tracks ?? index.tracks)[manifest.track.id]) continue;
+    if (!tracks) tracks = { ...index.tracks };
+    tracks[manifest.track.id] = manifest;
   }
-  return next;
+  return tracks ? { ...index, tracks } : index;
+}
+
+/**
+ * True for an entry rebuilt from a file name by `recoverOfflineIndex`: the
+ * title is the id and no metadata survived. The sidecar manifest for the same
+ * download still has the original track, so its fields can be restored without
+ * touching entries that came from the server.
+ */
+export function isRecoveredEntry(entry: OfflineTrack): boolean {
+  const track = entry.track;
+  return track.title === track.id && !track.album && !track.artist && !track.coverArt;
+}
+
+/**
+ * Upgrades entries that were recovered from file names with the metadata from
+ * their sidecar manifest. Normal index entries always win, as in
+ * `restoreManifestTracks`.
+ */
+export function mergeRecoveredMetadata(
+  index: OfflineIndex,
+  manifests: OfflineTrack[],
+): OfflineIndex {
+  if (manifests.length === 0) return index;
+  const byId = new Map(manifests.map((manifest) => [manifest.track.id, manifest]));
+  let tracks: Record<string, OfflineTrack> | null = null;
+  for (const [id, entry] of Object.entries(index.tracks)) {
+    if (!isRecoveredEntry(entry)) continue;
+    const manifest = byId.get(id);
+    if (!manifest) continue;
+    if (!tracks) tracks = { ...index.tracks };
+    tracks[id] = { ...entry, track: { ...manifest.track, id } };
+  }
+  return tracks ? { ...index, tracks } : index;
 }
 
 export function coverUri(index: OfflineIndex, coverArt: string | undefined): string | undefined {
@@ -223,7 +324,48 @@ export function coverUri(index: OfflineIndex, coverArt: string | undefined): str
   return index.covers?.[coverArt]?.fileUri;
 }
 
+/**
+ * Choose the oldest downloads to drop until the library fits `limitBytes`.
+ * Tracks in `keepTrackIds` (the current queue) are never evicted. Returns the
+ * ids oldest-first and the bytes they would free.
+ */
+export function planEviction(
+  index: OfflineIndex,
+  limitBytes: number,
+  keepTrackIds: ReadonlySet<string> = new Set(),
+): { trackIds: string[]; freedBytes: number } {
+  let total = 0;
+  for (const entry of Object.values(index.tracks)) total += entry.size;
+  if (total <= limitBytes) return { trackIds: [], freedBytes: 0 };
+
+  const candidates = Object.entries(index.tracks)
+    .filter(([id]) => !keepTrackIds.has(id))
+    .sort((a, b) => a[1].downloadedAt - b[1].downloadedAt);
+
+  const trackIds: string[] = [];
+  let freed = 0;
+  for (const [id, entry] of candidates) {
+    if (total - freed <= limitBytes) break;
+    trackIds.push(id);
+    freed += entry.size;
+  }
+  return { trackIds, freedBytes: freed };
+}
+
+/** All covers still referenced by a track or collection. O(tracks + collections). */
+export function usedCovers(index: OfflineIndex): Set<string> {
+  const used = new Set<string>();
+  for (const entry of Object.values(index.tracks)) {
+    if (entry.track.coverArt) used.add(entry.track.coverArt);
+  }
+  for (const collection of Object.values(index.collections)) {
+    if (collection.coverArt) used.add(collection.coverArt);
+  }
+  return used;
+}
+
 export function coverStillUsed(index: OfflineIndex, coverArt: string): boolean {
+  // Single check: short-circuit instead of building the full set.
   return (
     Object.values(index.tracks).some((entry) => entry.track.coverArt === coverArt) ||
     Object.values(index.collections).some((collection) => collection.coverArt === coverArt)
@@ -269,13 +411,15 @@ export function reconcileCollection(
 
   const nextTrackIds = Array.from(new Set(trackIds));
   const nextSet = new Set(nextTrackIds);
-  const otherCollections = Object.entries(index.collections).filter(
-    ([id]) => id !== collection.id,
-  );
+  // One pass over the other collections instead of scanning their id arrays
+  // for every removed track.
+  const usedElsewhere = new Set<string>();
+  for (const [id, other] of Object.entries(index.collections)) {
+    if (id === collection.id) continue;
+    for (const trackId of other.trackIds) usedElsewhere.add(trackId);
+  }
   const removedTrackIds = existing.trackIds.filter(
-    (trackId) =>
-      !nextSet.has(trackId) &&
-      !otherCollections.some(([, other]) => other.trackIds.includes(trackId)),
+    (trackId) => !nextSet.has(trackId) && !usedElsewhere.has(trackId),
   );
   const deleteTrackIds = removedTrackIds.filter((trackId) => Boolean(index.tracks[trackId]));
 
@@ -288,10 +432,7 @@ export function reconcileCollection(
       trackIds: nextTrackIds,
     },
   };
-  let next: OfflineIndex = { ...index, collections };
-  for (const trackId of deleteTrackIds) {
-    next = removeDownloadedTrack(next, trackId);
-  }
+  const next = removeDownloadedTracks({ ...index, collections }, deleteTrackIds);
 
   return { index: next, removedTrackIds, deleteTrackIds };
 }
@@ -312,21 +453,19 @@ export function removeCollectionTrack(
 
   const stillUsed = Object.values(collections).some((item) => item.trackIds.includes(trackId));
   const next = { ...index, collections };
-  return stillUsed ? next : removeDownloadedTrack(next, trackId);
+  return stillUsed ? next : removeDownloadedTracks(next, [trackId]);
 }
 
 export function removeCollection(index: OfflineIndex, collectionId: string): OfflineIndex {
   const collection = index.collections[collectionId];
   if (!collection) return index;
-  let next = index;
   const stillUsed = new Set<string>();
   for (const [id, other] of Object.entries(index.collections)) {
     if (id === collectionId) continue;
     other.trackIds.forEach((trackId) => stillUsed.add(trackId));
   }
-  for (const trackId of collection.trackIds) {
-    if (!stillUsed.has(trackId)) next = removeDownloadedTrack(next, trackId);
-  }
+  const unused = collection.trackIds.filter((trackId) => !stillUsed.has(trackId));
+  const next = removeDownloadedTracks(index, unused);
   const collections = { ...next.collections };
   delete collections[collectionId];
   return { ...next, collections };

@@ -35,6 +35,12 @@ export interface AudioEngine {
   load(source: AudioSource): Promise<void>;
   /** Optional: load several items so the OS sees next/previous availability. */
   setQueue?: (sources: AudioSource[], startIndex: number) => Promise<void>;
+  /**
+   * Optional: drop one item from the OS queue without reloading the current
+   * track. `mediaId` guards against a stale native queue: the item is only
+   * removed when that id still sits at the index.
+   */
+  removeQueueItem?: (index: number, mediaId: string) => Promise<void>;
   play(): Promise<void>;
   pause(): Promise<void>;
   seek(position: number): Promise<void>;

@@ -11,6 +11,7 @@ import { useCallback } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
+import { useShallow } from 'zustand/react/shallow';
 import type { Track } from '@/core/models';
 import { currentTrack } from '@/core/queue/reducer';
 import { useOfflineStore } from '@/stores/offline';
@@ -43,9 +44,14 @@ export function TrackRow({
   onMore,
 }: TrackRowProps) {
   const theme = useTheme();
-  const isCurrent = usePlayerStore((state) => currentTrack(state.queueState)?.id === track.id);
-  const isPlaying = usePlayerStore(
-    (state) => currentTrack(state.queueState)?.id === track.id && state.status === 'playing',
+  const { isCurrent, isPlaying } = usePlayerStore(
+    useShallow((state) => {
+      const currentId = currentTrack(state.queueState)?.id;
+      return {
+        isCurrent: currentId === track.id,
+        isPlaying: currentId === track.id && state.status === 'playing',
+      };
+    }),
   );
   const toggle = usePlayerStore((state) => state.toggle);
   const addToQueue = usePlayerStore((state) => state.addToQueue);

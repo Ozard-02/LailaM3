@@ -60,6 +60,14 @@ export function useCoverSwipe({
   const server = useAuthStore((state) => state.server);
   const trackId = selectCurrentTrack(queueState)?.id;
 
+  // A drag also fires the Pressable's onPress ("tap for lyrics"). This flag
+  // lets the tap handler ignore the click that closes a swipe; it clears a
+  // moment after the gesture so keyboard activation is never blocked for long.
+  const [swiped, setSwiped] = useState(false);
+  const resetSwiped = useCallback(() => {
+    setTimeout(() => setSwiped(false), 400);
+  }, []);
+
   // dir < 0: swiped left (next); dir > 0: swiped right (previous).
   const commit = useCallback(
     (dir: number) => {
@@ -104,10 +112,15 @@ export function useCoverSwipe({
         .enabled(enabled)
         .activeOffsetX([-18, 18])
         .failOffsetY([-18, 18])
+        .onBegin(() => {
+          runOnJS(setSwiped)(false);
+        })
         .onUpdate((event) => {
           swipeX.set(Math.max(-distance, Math.min(distance, event.translationX)));
+          if (Math.abs(event.translationX) > 8) runOnJS(setSwiped)(true);
         })
         .onEnd((event) => {
+          runOnJS(resetSwiped)();
           const dx = event.translationX;
           const vx = event.velocityX;
           const dir =
@@ -130,8 +143,8 @@ export function useCoverSwipe({
             }),
           );
         }),
-    [commit, distance, enabled, reduceMotion, swipeX],
+    [commit, distance, enabled, reduceMotion, resetSwiped, swipeX],
   );
 
-  return { gesture, swipeX };
+  return { gesture, swipeX, swiped };
 }

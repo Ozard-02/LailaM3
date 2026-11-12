@@ -13,6 +13,9 @@ import { Text } from '@/ui/Text';
 import { selectFeedback } from '@/utils/haptics';
 import { useSwipeRow } from './useSwipeRow';
 
+/** Gap between two queue rows; part of the list pitch. */
+const ROW_GAP = 4;
+
 export interface QueueRowProps {
   item: Track;
   position: number;
@@ -23,6 +26,8 @@ export interface QueueRowProps {
   onPlayNext: (index: number) => void;
   onTrash: (index: number) => void;
   onDismissToast: () => void;
+  /** Reports the full row pitch (row plus gap) for queue alignment. */
+  onHeight?: (height: number) => void;
 }
 
 export function QueueRow({
@@ -35,6 +40,7 @@ export function QueueRow({
   onPlayNext,
   onTrash,
   onDismissToast,
+  onHeight,
 }: QueueRowProps) {
   const theme = useTheme();
   const jump = usePlayerStore((state) => state.jump);
@@ -66,7 +72,10 @@ export function QueueRow({
     });
 
   return (
-    <View style={[styles.swipeContainer, { borderRadius: theme.radius.sm }]}>
+    <View
+      style={[styles.swipeContainer, { borderRadius: theme.radius.sm }]}
+      onLayout={(event) => onHeight?.(event.nativeEvent.layout.height + ROW_GAP)}
+    >
       <View
         pointerEvents="none"
         style={[
@@ -205,7 +214,7 @@ export function QueueRow({
 
 const styles = StyleSheet.create({
   swipeContainer: {
-    marginBottom: 4,
+    marginBottom: ROW_GAP,
   },
   actionClip: {
     overflow: 'hidden',

@@ -54,6 +54,9 @@ tablet or a desktop browser.
 - Original FLAC and server-side transcoding to Opus or MP3.
 - Play, pause, seek, previous/next, volume, repeat and shuffle.
 - A persistent queue with drag reorder (Alt+↑/↓ keyboard fallback on web).
+- The queue opens on the playing track and is aligned before the panel appears.
+- Trashing a track removes it from the native queue in place, without restarting
+  playback.
 - Background playback and lock-screen/media controls on Android.
 - Media Session and keyboard transport on the web.
 - Lyrics: OpenSubsonic structured lyrics, LRC fallback and synced auto-scroll.
@@ -75,6 +78,10 @@ tablet or a desktop browser.
 - Downloaded playlists reconcile when opened: new tracks are queued, removed
   tracks are cleaned up, and files are deleted only when no other collection uses
   them.
+- A local download budget with an explicit Free up space action; collections show
+  their on-disk size.
+- Library search and the downloads list are virtualised and batch their offline
+  index writes.
 
 ### Devices and Segue
 
@@ -109,9 +116,9 @@ tablet or a desktop browser.
 
 ## What's next?
 
-- Stabilisation and efficiency: refactor and organise the existing code, and
-  reduce CPU, memory, bundle and network cost. No new features until this pass is
-  complete.
+- Stabilisation and efficiency: the measured large-library, offline-index and
+  persistence pass has landed. Continue with device validation rather than new
+  features.
 - Complete the Media3 device matrix (notification, lock screen, Bluetooth, audio
   focus, gapless, codecs) before a stable release.
 - Real-device DLNA validation (notification sync and end-of-track advance).
@@ -200,10 +207,10 @@ npm run test:e2e      # Playwright: desktop + mobile + one Firefox seek check
 npm run test:e2e:all  # full desktop × mobile matrix
 ```
 
-Current baseline: **105 unit tests**, **56 default E2E checks** (94 in the full
-matrix). See [`docs/testing.md`](docs/testing.md) for coverage, codec/browser
-matrices and device status. The mock server is a development fixture and never
-holds real credentials.
+Current baseline: **154 unit tests**, **66 default E2E checks**. See
+[`docs/testing.md`](docs/testing.md) for coverage, codec/browser matrices and
+device status. The mock server is a development fixture and never holds real
+credentials.
 
 ## Architecture
 

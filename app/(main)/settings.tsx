@@ -53,6 +53,15 @@ const CHROME_SHAPES: { value: ChromeRadius; label: string }[] = [
   { value: 'soft', label: 'Soft' },
 ];
 
+const GB = 1024 ** 3;
+const OFFLINE_LIMITS: { value: number | null; label: string }[] = [
+  { value: null, label: 'Off' },
+  { value: 5 * GB, label: '5 GB' },
+  { value: 10 * GB, label: '10 GB' },
+  { value: 25 * GB, label: '25 GB' },
+  { value: 50 * GB, label: '50 GB' },
+];
+
 const DOWNLOAD_QUALITIES: { value: DownloadQuality; label: string; hint: string }[] = [
   { value: 'original', label: 'Original', hint: 'Download the file exactly as stored' },
   { value: 'opus', label: 'Opus 128', hint: 'Smaller files; server transcodes to Opus' },
@@ -164,6 +173,8 @@ export default function SettingsScreen() {
   const setParallelDownloads = useSettingsStore((state) => state.setParallelDownloads);
   const downloadQuality = useSettingsStore((state) => state.downloadQuality);
   const setDownloadQuality = useSettingsStore((state) => state.setDownloadQuality);
+  const offlineLimitBytes = useSettingsStore((state) => state.offlineLimitBytes);
+  const setOfflineLimit = useSettingsStore((state) => state.setOfflineLimit);
   const chromeRadius = useSettingsStore((state) => state.chromeRadius);
   const setChromeRadius = useSettingsStore((state) => state.setChromeRadius);
   const trashPlaylistIds = useSettingsStore((state) => state.trashPlaylistIds);
@@ -387,6 +398,23 @@ export default function SettingsScreen() {
               />
             ))}
           </View>
+          <Text variant="caption" tone="secondary" style={styles.downloadCount}>
+            Local download budget:
+          </Text>
+          <View style={styles.swipeOptions}>
+            {OFFLINE_LIMITS.map((item) => (
+              <Pill
+                key={item.label}
+                label={item.label}
+                selected={offlineLimitBytes === item.value}
+                onPress={() => setOfflineLimit(item.value)}
+              />
+            ))}
+          </View>
+          <Text variant="caption" tone="tertiary">
+            Use Free up space in Downloads to drop the oldest files; the current queue is
+            kept.
+          </Text>
         </Surface>
       </Section>
 

@@ -10,6 +10,7 @@ import {
   isDownloaded,
   localUri,
   mergeCollectionTracks,
+  mergeRecoveredMetadata,
   nextDownloadedIndex,
   offlineAlbums,
   offlineArtists,
@@ -22,6 +23,7 @@ import {
   removeCollection,
   removeCollectionTrack,
   removeDownloadedTrack,
+  removeDownloadedTracks,
   downloadSizeError,
   estimateDownloadBytes,
 } from '@/core/offline';
@@ -403,5 +405,99 @@ describe('offline manifests', () => {
     const newer = { ...manifest, track: { ...track, title: 'Newer server title' } };
     index = restoreManifestTracks(index, [newer]);
     expect(index.tracks['artist/song:1']?.track.title).toBe('Original title');
+  });
+});
+
+describe('batch removal', () => {
+  it('removes several tracks in one pass and keeps shared collections', () => {
+    let index = emptyOfflineIndex();
+    for (const id of ['a', 'b', 'c', 'd']) {
+      index = addDownloadedTrack(index, track(id), `file:///${id}.flac`, 10, 'flac');
+    }
+    index = addCollection(index, { id: 'al-1', type: 'album', name: 'A', trackIds: ['a', 'b'] });
+    index = addCollection(index, { id: 'pl-1', type: 'playlist', name: 'P', trackIds: ['a', 'c'] });
+
+    const next = removeDownloadedTracks(index, ['a', 'b']);
+
+    expect(isDownloaded(next, 'a')).toBe(false);
+    expect(isDownloaded(next, 'b')).toBe(false);
+    expect(isDownloaded(next, 'c')).toBe(true);
+    expect(next.collections['al-1']).toBeUndefined();
+    expect(next.collections['pl-1']?.trackIds).toEqual(['c']);
+  });
+
+  it('returns the same index when none of the ids exist', () => {
+    const index = addDownloadedTrack(emptyOfflineIndex(), track('a'), 'file:///a.flac', 10, 'flac');
+    expect(removeDownloadedTracks(index, [])).toBe(index);
+    expect(removeDownloadedTracks(index, ['missing'])).toBe(index);
+  });
+
+  it('matches single removal semantics on a large index', () => {
+    let index = emptyOfflineIndex();
+    const ids = Array.from({ length: 500 }, (_, i) => `t-${i}`);
+    for (const id of ids) {
+      index = addDownloadedTrack(index, track(id), `file:///${id}.flac`, 10, 'flac');
+    }
+    index = addCollection(index, { id: 'big', type: 'playlist', name: 'Big', trackIds: ids });
+
+    const removed = ids.slice(0, 200);
+    const next = removeDownloadedTracks(index, removed);
+
+    expect(Object.keys(next.tracks)).toHaveLength(300);
+    expect(next.collections['big']?.trackIds).toHaveLength(300);
+    expect(next.collections['big']?.trackIds).not.toContain(removed[0]);
+  });
+});
+
+describe('recovered metadata', () => {
+  const manifest = {
+    track: {
+      id: 'abc',
+      title: 'Real title',
+      artist: 'Artist',
+      album: 'Album',
+      albumId: 'al-1',
+      coverArt: 'cover-1',
+    },
+    fileUri: 'file:///downloads/abc.flac',
+    size: 10,
+    extension: 'flac',
+    downloadedAt: 1,
+  };
+
+  it('restores metadata from the sidecar for entries rebuilt from file names', () => {
+    const recovered = recoverOfflineIndex(emptyOfflineIndex(), [
+      { name: 'abc.flac', uri: 'file:///downloads/abc.flac', size: 10 },
+    ]);
+    expect(recovered.tracks.abc?.track.title).toBe('abc');
+
+    const merged = mergeRecoveredMetadata(recovered, [manifest]);
+    expect(merged.tracks.abc?.track).toMatchObject({
+      id: 'abc',
+      title: 'Real title',
+      artist: 'Artist',
+      albumId: 'al-1',
+    });
+    // The local file entry is preserved.
+    expect(merged.tracks.abc?.fileUri).toBe('file:///downloads/abc.flac');
+    expect(merged.tracks.abc?.size).toBe(10);
+  });
+
+  it('never overwrites an entry that came from the server', () => {
+    const index = addDownloadedTrack(
+      emptyOfflineIndex(),
+      { id: 'abc', title: 'Newer server title', albumId: 'al-2' },
+      'file:///downloads/abc.flac',
+      10,
+      'flac',
+    );
+    expect(mergeRecoveredMetadata(index, [manifest])).toBe(index);
+  });
+
+  it('leaves entries without a sidecar alone', () => {
+    const recovered = recoverOfflineIndex(emptyOfflineIndex(), [
+      { name: 'xyz.flac', uri: 'file:///downloads/xyz.flac', size: 10 },
+    ]);
+    expect(mergeRecoveredMetadata(recovered, [manifest])).toBe(recovered);
   });
 });

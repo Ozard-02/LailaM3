@@ -184,6 +184,17 @@ export class NativeAudioEngine implements AudioEngine {
     if (sameTrack) await this.waitForReady();
   }
 
+  async removeQueueItem(index: number, mediaId: string): Promise<void> {
+    await this.ensureSetup();
+    this.ensureListeners();
+    const current = this.sources[index];
+    if (!current || current.id !== mediaId) return;
+    await this.nativePlayer.removeQueueItem(index, mediaId);
+    this.sources = this.sources.filter((_, position) => position !== index);
+    if (this.lastIndex > index) this.lastIndex -= 1;
+    this.emit();
+  }
+
   async play(): Promise<void> {
     await this.ensureSetup();
     this.lastError = undefined;

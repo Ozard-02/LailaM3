@@ -158,6 +158,26 @@ test.describe('Laila web app', () => {
       .toContain('Now playing');
   });
 
+  test('re-opens the player from the pill after closing it', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    const mini = page.getByRole('button', { name: /Now playing: First Light/ });
+    await mini.click();
+    await expect(page.getByRole('button', { name: 'Close player' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close player' }).click();
+    await expect(page.getByRole('button', { name: 'Close player' })).toHaveCount(0);
+
+    // A parked morph overlay must not stay interactive: this tap has to open
+    // the player again. While it was stale the invisible cover/play buttons
+    // took the tap and toggled playback instead.
+    await mini.click();
+    await expect(page.getByRole('button', { name: 'Close player' })).toBeVisible();
+    expect(await page.evaluate(() => navigator.mediaSession?.playbackState ?? null)).toBe(
+      'playing',
+    );
+  });
+
   test('Space toggles playback instead of re-running the focused button', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
@@ -600,9 +620,9 @@ test.describe('Laila web app', () => {
     await page.mouse.down();
     await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2, { steps: 8 });
     await page.mouse.up();
-    await expect(
-      page.getByTestId('player-sheet').getByText('Slow Motion').first(),
-    ).toBeVisible();
+    // The queue panel is no longer pre-mounted, so assert the actual track
+    // change rather than any "Slow Motion" text inside the player sheet.
+    await expect(page.locator('[aria-label^="Now playing: Slow Motion"]')).toHaveCount(1);
     // The new cover must slide back in, not stay parked off-screen.
     await page.waitForTimeout(700);
     const after = await page.getByRole('button', { name: /Album cover/ }).first().boundingBox();
@@ -776,9 +796,10 @@ test.describe('Laila web app', () => {
       const w = window as unknown as { __overlap: number[] };
       w.__overlap = [];
       const overlay = document.querySelector('[data-testid="player-morph-overlay"]');
-      const sheet = document.querySelector('[data-testid="queue-sheet"]');
       const start = performance.now();
       const tick = () => {
+        // The queue panel mounts on first intent, so it may not exist yet.
+        const sheet = document.querySelector('[data-testid="queue-sheet"]');
         if (overlay && sheet) {
           // The cover is the largest overlay child (web adds 0-size wrappers).
           const art = Array.from(overlay.querySelectorAll('*'))

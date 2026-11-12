@@ -1,10 +1,11 @@
 import { VirtualList } from '@/components/VirtualList';
 import { useRouter } from 'expo-router';
 import { Disc3, ListMusic, Mic2, Search as SearchIcon, Tags, X } from '@/ui/icons';
-import { useEffect, useRef, useState, type ComponentRef } from 'react';
-import { ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
-import { matchesSearch } from '@/core/search/text';
-import { usePinyinReady } from '@/hooks/usePinyinReady';
+import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import type { Album, Artist, Genre, Playlist, Track } from '@/core/models';
+import { filterSearch } from '@/core/search/text';
+import { useSearchIndex } from '@/hooks/useSearchIndex';
 import {
   downloadedTracks,
   offlineAlbums,
@@ -34,8 +35,17 @@ import { Input } from '@/ui/Input';
 import { Pill } from '@/ui/Pill';
 import { Skeleton } from '@/ui/Skeleton';
 import { Text } from '@/ui/Text';
+import { buildSearchItems, searchItemKey, type SearchItem } from '@/utils/searchItems';
 
 type Tab = 'albums' | 'artists' | 'playlists' | 'genres';
+
+// Module scope keeps the identity stable, so the search index is rebuilt only
+// when the data (or pinyin) changes, not on every render.
+const albumValues = (album: Album) => [album.name, album.artist];
+const artistValues = (artist: Artist) => [artist.name];
+const playlistValues = (playlist: Playlist) => [playlist.name, playlist.owner, playlist.comment];
+const genreValues = (genre: Genre) => [genre.name];
+const trackValues = (track: Track) => [track.title, track.artist, track.album];
 
 const TABS: { key: Tab; label: string; icon: typeof Disc3 }[] = [
   { key: 'albums', label: 'Albums', icon: Disc3 },
@@ -90,12 +100,26 @@ export default function LibraryScreen() {
   const genreColumns = Math.max(2, Math.floor((available + 8) / 168));
   const genreCardWidth = (available - 8 * (genreColumns - 1)) / genreColumns;
 
-  const albumData = offline
-    ? offlineAlbums(offlineIndex)
-    : (albums.data?.pages.flat() ?? []);
-  const artistData = offline ? offlineArtists(offlineIndex) : (artists.data ?? []);
-  const playlistData = offline ? offlinePlaylists(offlineIndex) : (playlists.data ?? []);
-  const genreData = offline ? offlineGenres(offlineIndex) : (genres.data ?? []);
+  const albumData = useMemo(
+    () => (offline ? offlineAlbums(offlineIndex) : (albums.data?.pages.flat() ?? [])),
+    [offline, offlineIndex, albums.data],
+  );
+  const artistData = useMemo(
+    () => (offline ? offlineArtists(offlineIndex) : (artists.data ?? [])),
+    [offline, offlineIndex, artists.data],
+  );
+  const playlistData = useMemo(
+    () => (offline ? offlinePlaylists(offlineIndex) : (playlists.data ?? [])),
+    [offline, offlineIndex, playlists.data],
+  );
+  const genreData = useMemo(
+    () => (offline ? offlineGenres(offlineIndex) : (genres.data ?? [])),
+    [offline, offlineIndex, genres.data],
+  );
+  const offlineSongs = useMemo(
+    () => (offline ? downloadedTracks(offlineIndex) : []),
+    [offline, offlineIndex],
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => setSongQuery(search), 320);
@@ -107,44 +131,75 @@ export default function LibraryScreen() {
   }, [searchFocusRequest]);
 
   const songSearch = useSearch(offline ? '' : songQuery);
-  usePinyinReady(); // re-filter once CJK romanisation has loaded
   const query = search.trim();
   const searching = query.length > 0;
-  const matches = (...values: (string | undefined)[]) => matchesSearch(values, query);
+
+  // Haystacks are folded once per data change; filtering per keystroke is a
+  // plain `includes` scan instead of re-normalising the whole library.
+  const albumIndex = useSearchIndex(albumData, albumValues);
+  const artistIndex = useSearchIndex(artistData, artistValues);
+  const playlistIndex = useSearchIndex(playlistData, playlistValues);
+  const genreIndex = useSearchIndex(genreData, genreValues);
+  const songIndex = useSearchIndex(offlineSongs, trackValues);
 
   // `search3` covers the whole library; the local filter only sees the pages
   // already loaded (and downloaded albums offline). Merge both, server first.
-  const filteredAlbums = searching
-    ? uniqueById([
-        ...(!offline ? (songSearch.data?.albums ?? []) : []),
-        ...albumData.filter((album) => matches(album.name, album.artist)),
-      ])
-    : albumData;
-  const filteredArtists = searching
-    ? uniqueById([
-        ...(!offline ? (songSearch.data?.artists ?? []) : []),
-        ...artistData.filter((artist) => matches(artist.name)),
-      ])
-    : artistData;
-  const filteredPlaylists = searching
-    ? playlistData.filter((playlist) => matches(playlist.name, playlist.owner, playlist.comment))
-    : playlistData;
-  const filteredGenres = searching
-    ? genreData.filter((genre) => matches(genre.name))
-    : genreData;
-  const filteredSongs = searching
-    ? offline
-      ? downloadedTracks(offlineIndex).filter((track) =>
-          matches(track.title, track.artist, track.album),
-        )
-      : (songSearch.data?.songs ?? [])
-    : [];
+  const filtered = useMemo(() => {
+    const albums = searching
+      ? uniqueById([
+          ...(!offline ? (songSearch.data?.albums ?? []) : []),
+          ...filterSearch(albumIndex, query),
+        ])
+      : albumData;
+    const artists = searching
+      ? uniqueById([
+          ...(!offline ? (songSearch.data?.artists ?? []) : []),
+          ...filterSearch(artistIndex, query),
+        ])
+      : artistData;
+    const playlists = searching ? filterSearch(playlistIndex, query) : playlistData;
+    const genres = searching ? filterSearch(genreIndex, query) : genreData;
+    const songs = searching
+      ? offline
+        ? filterSearch(songIndex, query)
+        : (songSearch.data?.songs ?? [])
+      : [];
+    return { albums, artists, playlists, genres, songs };
+  }, [
+    searching,
+    offline,
+    songSearch.data,
+    albumIndex,
+    artistIndex,
+    playlistIndex,
+    genreIndex,
+    songIndex,
+    query,
+    albumData,
+    artistData,
+    playlistData,
+    genreData,
+  ]);
+  const {
+    albums: filteredAlbums,
+    artists: filteredArtists,
+    playlists: filteredPlaylists,
+    genres: filteredGenres,
+    songs: filteredSongs,
+  } = filtered;
   const resultCount =
     filteredAlbums.length +
     filteredArtists.length +
     filteredPlaylists.length +
     filteredGenres.length +
     filteredSongs.length;
+  const playlistItems = useMemo(
+    () => [
+      { kind: 'favourite' as const },
+      ...playlistData.map((playlist) => ({ kind: 'playlist' as const, playlist })),
+    ],
+    [playlistData],
+  );
   const searchLoading =
     albums.isLoading ||
     artists.isLoading ||
@@ -153,6 +208,35 @@ export default function LibraryScreen() {
     songSearch.isLoading;
   const searchError =
     albums.isError || artists.isError || playlists.isError || genres.isError || songSearch.isError;
+  const searchItems = useMemo<SearchItem[]>(() => {
+    if (!searching) return [];
+    const items = buildSearchItems({
+      songs: filteredSongs,
+      albums: filteredAlbums,
+      artists: filteredArtists,
+      playlists: filteredPlaylists,
+      genres: filteredGenres,
+      albumColumns,
+      playlistColumns,
+    });
+    if (searchError) items.push({ kind: 'error' });
+    else if (searchLoading) items.push({ kind: 'loading' });
+    else if (resultCount === 0) items.push({ kind: 'empty' });
+    if (resultCount > 0) items.push({ kind: 'count', count: resultCount });
+    return items;
+  }, [
+    searching,
+    filteredSongs,
+    filteredAlbums,
+    filteredArtists,
+    filteredPlaylists,
+    filteredGenres,
+    albumColumns,
+    playlistColumns,
+    searchError,
+    searchLoading,
+    resultCount,
+  ]);
 
   const listEmpty = (message: string, title: string) => (
     <EmptyState title={title} message={message} />
@@ -185,117 +269,112 @@ export default function LibraryScreen() {
       />
 
       {searching ? (
-        <ScrollView
+        <VirtualList
           style={styles.fill}
-          contentContainerStyle={{ paddingBottom: chromeInset + 32, gap: 20 }}
+          data={searchItems}
+          keyExtractor={searchItemKey}
+          getItemType={(item) => item.kind}
+          contentContainerStyle={{ paddingBottom: chromeInset + 32 }}
           showsVerticalScrollIndicator={false}
-        >
-          {filteredSongs.length ? (
-            <View>
-              <Text variant="title" style={styles.sectionTitle}>
-                Songs
-              </Text>
-              {filteredSongs.slice(0, 25).map((track, index) => (
-                <TrackRow
-                  key={track.id}
-                  track={track}
-                  index={index}
-                  onPlay={() => void playTracks(filteredSongs, index)}
-                />
-              ))}
-            </View>
-          ) : null}
-
-          {filteredAlbums.length ? (
-            <View>
-              <Text variant="title" style={styles.sectionTitle}>
-                Albums
-              </Text>
-              <View style={styles.grid}>
-                {filteredAlbums.map((album) => (
-                  <AlbumCard key={album.id} album={album} width={albumCardWidth} />
-                ))}
-              </View>
-            </View>
-          ) : null}
-
-          {filteredArtists.length ? (
-            <View>
-              <Text variant="title" style={styles.sectionTitle}>
-                Artists
-              </Text>
-              {filteredArtists.map((artist) => (
-                <ArtistRow key={artist.id} artist={artist} />
-              ))}
-            </View>
-          ) : null}
-
-          {filteredPlaylists.length ? (
-            <View>
-              <Text variant="title" style={styles.sectionTitle}>
-                Playlists
-              </Text>
-              <View style={styles.grid}>
-                {filteredPlaylists.map((playlist) => (
-                  <PlaylistCard
-                    key={playlist.id}
-                    playlist={playlist}
-                    width={playlistCardWidth}
+          renderItem={({ item }) => {
+            switch (item.kind) {
+              case 'section':
+                return (
+                  <Text variant="title" style={styles.sectionTitle}>
+                    {item.title}
+                  </Text>
+                );
+              case 'song':
+                return (
+                  <TrackRow
+                    track={item.track}
+                    index={item.index}
+                    onPlay={() => void playTracks(filteredSongs, item.index)}
                   />
-                ))}
-              </View>
-            </View>
-          ) : null}
-
-          {filteredGenres.length ? (
-            <View>
-              <Text variant="title" style={styles.sectionTitle}>
-                Genres
-              </Text>
-              <View style={styles.genreGrid}>
-                {filteredGenres.map((genre) => (
-                  <Pill
-                    key={genre.name}
-                    label={`${genre.name}${genre.songCount ? ` · ${genre.songCount}` : ''}`}
-                    onPress={() =>
-                      router.push(`/(main)/genre/${encodeURIComponent(genre.name)}` as never)
+                );
+              case 'albumRow':
+                return (
+                  <View style={[styles.grid, styles.searchRow]}>
+                    {item.albums.map((album) => (
+                      <AlbumCard key={album.id} album={album} width={albumCardWidth} />
+                    ))}
+                  </View>
+                );
+              case 'artist':
+                return <ArtistRow artist={item.artist} />;
+              case 'playlistRow':
+                return (
+                  <View style={[styles.grid, styles.searchRow]}>
+                    {item.playlists.map((playlist) => (
+                      <PlaylistCard
+                        key={playlist.id}
+                        playlist={playlist}
+                        width={playlistCardWidth}
+                      />
+                    ))}
+                  </View>
+                );
+              case 'genres':
+                return (
+                  <View style={[styles.genreGrid, styles.searchRow]}>
+                    {item.genres.map((genre) => (
+                      <Pill
+                        key={genre.name}
+                        label={`${genre.name}${genre.songCount ? ` · ${genre.songCount}` : ''}`}
+                        onPress={() =>
+                          router.push(`/(main)/genre/${encodeURIComponent(genre.name)}` as never)
+                        }
+                      />
+                    ))}
+                  </View>
+                );
+              case 'notice':
+                return (
+                  <Text variant="caption" tone="tertiary">
+                    {item.text}
+                  </Text>
+                );
+              case 'loading':
+                return (
+                  <View style={styles.listSkeletons}>
+                    {Array.from({ length: 4 }).map((_, index) => (
+                      <Skeleton
+                        key={index}
+                        style={{ width: '100%', height: 58, borderRadius: 8 }}
+                      />
+                    ))}
+                  </View>
+                );
+              case 'error':
+                return (
+                  <ErrorState
+                    title="Search failed"
+                    message={
+                      songSearch.error instanceof Error
+                        ? songSearch.error.message
+                        : 'The server could not answer this search.'
                     }
+                    onRetry={() => void songSearch.refetch()}
                   />
-                ))}
-              </View>
-            </View>
-          ) : null}
-
-          {songSearch.isError ? (
-            <ErrorState
-              title="Search failed"
-              message={
-                songSearch.error instanceof Error
-                  ? songSearch.error.message
-                  : 'The server could not answer this search.'
-              }
-              onRetry={() => void songSearch.refetch()}
-            />
-          ) : null}
-          {searching && songSearch.isLoading ? (
-            <View style={styles.listSkeletons}>
-              {Array.from({ length: 4 }).map((_, index) => (
-                <Skeleton key={index} style={{ width: '100%', height: 58, borderRadius: 8 }} />
-              ))}
-            </View>
-          ) : null}
-          {resultCount === 0 && !searchLoading && !searchError ? (
-            <EmptyState
-              title="No matches"
-              message={`Nothing in your library matches “${search.trim()}”.`}
-            />
-          ) : null}
-          {resultCount > 0 ? (
-            <Text variant="caption" tone="tertiary">
-              {resultCount} {resultCount === 1 ? 'result' : 'results'}
-            </Text>
-          ) : null}
-        </ScrollView>
+                );
+              case 'empty':
+                return (
+                  <EmptyState
+                    title="No matches"
+                    message={`Nothing in your library matches “${search.trim()}”.`}
+                  />
+                );
+              case 'count':
+                return (
+                  <Text variant="caption" tone="tertiary">
+                    {item.count} {item.count === 1 ? 'result' : 'results'}
+                  </Text>
+                );
+              default:
+                return null;
+            }
+          }}
+        />
       ) : (
         <>
           <View style={styles.filters}>
@@ -412,10 +491,7 @@ export default function LibraryScreen() {
             <VirtualList
               key={`playlists-${playlistColumns}`}
               style={styles.fill}
-              data={[
-                { kind: 'favourite' as const },
-                ...playlistData.map((playlist) => ({ kind: 'playlist' as const, playlist })),
-              ]}
+              data={playlistItems}
               numColumns={playlistColumns}
               keyExtractor={(item) =>
                 item.kind === 'favourite' ? 'favourite' : item.playlist.id
@@ -545,6 +621,9 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     marginBottom: 10,
+  },
+  searchRow: {
+    marginBottom: 16,
   },
   loadMore: {
     alignSelf: 'center',

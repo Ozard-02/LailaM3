@@ -22,6 +22,8 @@ interface SettingsState {
   accentColor: string | null;
   parallelDownloads: number;
   downloadQuality: DownloadQuality;
+  /** Local download budget in bytes; null means unlimited. */
+  offlineLimitBytes: number | null;
   chromeRadius: ChromeRadius;
   setQuality: (quality: StreamQuality) => void;
   setMaxBitRate: (value: number | undefined) => void;
@@ -34,6 +36,7 @@ interface SettingsState {
   setAccentColor: (color: string | null) => void;
   setParallelDownloads: (count: number) => void;
   setDownloadQuality: (quality: DownloadQuality) => void;
+  setOfflineLimit: (bytes: number | null) => void;
   setChromeRadius: (radius: ChromeRadius) => void;
 }
 
@@ -58,6 +61,7 @@ export const useSettingsStore = create<SettingsState>()(
       accentColor: null,
       parallelDownloads: 2,
       downloadQuality: 'original',
+      offlineLimitBytes: null,
       chromeRadius: 'pill',
       setQuality: (quality) => set({ quality }),
       setMaxBitRate: (maxBitRate) => set({ maxBitRate }),
@@ -79,6 +83,7 @@ export const useSettingsStore = create<SettingsState>()(
       setParallelDownloads: (count) =>
         set({ parallelDownloads: Math.max(1, Math.min(6, Math.round(count))) }),
       setDownloadQuality: (downloadQuality) => set({ downloadQuality }),
+      setOfflineLimit: (offlineLimitBytes) => set({ offlineLimitBytes }),
       setChromeRadius: (chromeRadius) => set({ chromeRadius }),
     }),
     { name: 'laila.settings', storage },

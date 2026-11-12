@@ -107,6 +107,38 @@ export function matchesSearch(
   return tokens.every((token) => haystack.includes(token));
 }
 
+export interface SearchEntry<T> {
+  item: T;
+  /** Folded text plus its pinyin/initials forms, computed once per item. */
+  haystack: string;
+}
+
+/**
+ * Precomputes the haystack for a list. Local filters run on every keystroke;
+ * folding 20k items per key costs ~53 ms, while scanning precomputed haystacks
+ * costs ~1 ms. Build this in a `useMemo` keyed on the data and on
+ * `usePinyinReady()`.
+ */
+export function buildSearchIndex<T>(
+  items: readonly T[],
+  values: (item: T) => (string | undefined)[],
+): SearchEntry<T>[] {
+  return items.map((item) => ({ item, haystack: searchHaystack(values(item)) }));
+}
+
+/** Folds the query once, then matches the precomputed haystacks. */
+export function filterSearch<T>(
+  entries: readonly SearchEntry<T>[],
+  query: string,
+): T[] {
+  const folded = foldSearchText(query);
+  if (!folded) return entries.map((entry) => entry.item);
+  const tokens = folded.split(' ').filter(Boolean);
+  return entries
+    .filter((entry) => tokens.every((token) => entry.haystack.includes(token)))
+    .map((entry) => entry.item);
+}
+
 export function hasCjk(value: string): boolean {
   return CJK.test(value);
 }

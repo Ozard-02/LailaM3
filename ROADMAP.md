@@ -9,6 +9,13 @@ live in [`docs/testing.md`](docs/testing.md).
 
 - Android release builds and the web export are usable today.
 - There is no store release yet.
+- The measured large-library/offline performance pass has landed: offline index
+  updates are batched, persisted writes are coalesced, search indices are folded
+  once per data change, library search and Downloads are virtualised, and a local
+  download budget is available.
+- Queue behaviour is refined: the queue opens on the playing track before the
+  panel appears, and trashed tracks are removed from the native queue without
+  restarting playback.
 - The Android engine is a local Media3 module. It replaces the previous RNTP
   baseline and removes the non-commercial license blocker.
 - The Media3 device matrix is still pending: notification, lock screen,
@@ -25,6 +32,9 @@ live in [`docs/testing.md`](docs/testing.md).
 - Background playback and Android media notifications/lock-screen controls.
 - Media Session and keyboard transport on the web.
 - Queue trash with undo, shuffle/radio exclusions and per-server playlists.
+- Trashing removes the item from the native queue without reloading the current
+  track.
+- The queue opens on the playing track and aligns before the panel is visible.
 - Radio top-up, up-next and queue reordering.
 
 ### Library
@@ -44,6 +54,10 @@ live in [`docs/testing.md`](docs/testing.md).
 - Downloaded playlists reconcile when opened: new tracks are queued, removed
   tracks are cleaned up, and files are deleted only when no other collection uses
   them.
+- Local download budget with Free up space; collections display their on-disk
+  size.
+- Batched offline index writes, coalesced persistence, virtualised library search
+  and Downloads list.
 
 ### Devices and Segue
 
@@ -66,7 +80,8 @@ live in [`docs/testing.md`](docs/testing.md).
 
 ## Next
 
-1. Complete the Media3 device matrix on phone and tablet.
+1. Re-run the Media3 device matrix on phone and tablet after the queue/player
+   changes.
 2. Validate DLNA against a real speaker or TV.
 3. Test a multi-GB download index.
 4. Finish the screen-reader and contrast pass.
@@ -87,8 +102,9 @@ live in [`docs/testing.md`](docs/testing.md).
 
 ## Test baseline
 
-- 121 unit tests in 21 files.
-- 63 default E2E checks across Chromium desktop, mobile and one Firefox seek check.
+- 154 unit tests in 27 files.
+- 66 default E2E checks across Chromium desktop, the mobile viewport and one
+  Firefox seek check.
 - Typecheck, lint and the production web export pass.
 - Android release builds; device install and the Media3 matrix are pending.
 

@@ -1,11 +1,14 @@
 import { Download, HardDrive, Pause, Play, Trash2, WifiOff, X } from '@/ui/icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { DownloadEntry } from '@/core/offline';
 import { Screen } from '@/components/Screen';
+import { VirtualList } from '@/components/VirtualList';
+import { useBottomChromeInset } from '@/hooks/useBottomChromeInset';
 import { useDownloadProgress } from '@/stores/downloadProgress';
 import { useEffectiveOffline, useOfflineStore } from '@/stores/offline';
 import { useSettingsStore } from '@/stores/settings';
+import { usePlayerStore } from '@/stores/player';
 import { useFreeSpace } from '@/hooks/useFreeSpace';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Artwork } from '@/ui/Artwork';
@@ -18,6 +21,7 @@ import { Surface } from '@/ui/Surface';
 import { ProgressBar } from '@/ui/ProgressBar';
 import { Text } from '@/ui/Text';
 import { formatBytes, formatDurationLong } from '@/utils/format';
+import { buildDownloadItems, downloadItemKey } from '@/utils/downloadItems';
 
 function ActiveDownloadRow({ entry }: { entry: DownloadEntry }) {
   const theme = useTheme();
@@ -93,9 +97,13 @@ export default function DownloadsScreen() {
   const removeCollection = useOfflineStore((state) => state.removeCollection);
   const removeTrack = useOfflineStore((state) => state.removeTrack);
   const clearAll = useOfflineStore((state) => state.clearAll);
+  const freeUpSpace = useOfflineStore((state) => state.freeUpSpace);
   const downloads = useOfflineStore((state) => state.downloads);
   const freeBytes = useFreeSpace();
   const downloadQuality = useSettingsStore((state) => state.downloadQuality);
+  const offlineLimitBytes = useSettingsStore((state) => state.offlineLimitBytes);
+  const queue = usePlayerStore((state) => state.queueState.queue);
+  const queueIds = useMemo(() => new Set(queue.map((track) => track.id)), [queue]);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const run = async (action: () => Promise<void>, message: string) => {
@@ -107,17 +115,35 @@ export default function DownloadsScreen() {
     }
   };
 
-  const collections = Object.values(index.collections);
-  const tracks = Object.values(index.tracks);
-  const collectionTrackIds = new Set(collections.flatMap((collection) => collection.trackIds));
-  const looseTracks = tracks.filter((entry) => !collectionTrackIds.has(entry.track.id));
-  const activeDownloads = Object.values(downloads).filter((entry) => entry.status !== 'done');
-  const total = tracks.reduce((sum, entry) => sum + entry.size, 0);
+  const collections = useMemo(() => Object.values(index.collections), [index.collections]);
+  const tracks = useMemo(() => Object.values(index.tracks), [index.tracks]);
+  const collectionTrackIds = useMemo(
+    () => new Set(collections.flatMap((collection) => collection.trackIds)),
+    [collections],
+  );
+  const looseTracks = useMemo(
+    () => tracks.filter((entry) => !collectionTrackIds.has(entry.track.id)),
+    [tracks, collectionTrackIds],
+  );
+  const activeDownloads = useMemo(
+    () => Object.values(downloads).filter((entry) => entry.status !== 'done'),
+    [downloads],
+  );
+  const total = useMemo(
+    () => tracks.reduce((sum, entry) => sum + entry.size, 0),
+    [tracks],
+  );
+  const chromeInset = useBottomChromeInset();
+  const downloadItems = useMemo(
+    () => buildDownloadItems({ active: activeDownloads, collections, tracks: looseTracks }),
+    [activeDownloads, collections, looseTracks],
+  );
 
   return (
     <Screen
       title="Downloads"
       subtitle="Original files, kept on this device."
+      scroll={false}
       right={
         <Button
           label={
@@ -140,142 +166,201 @@ export default function DownloadsScreen() {
         />
       }
     >
-      <Surface style={styles.summary} bordered>
-        <View style={[styles.summaryIcon, { backgroundColor: theme.colors.accentSoft }]}>
-          <HardDrive size={20} color={theme.colors.accent} />
-        </View>
-        <View style={styles.summaryText}>
-          <Text variant="headline">
-            {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
-          </Text>
-          <Text variant="caption" tone="secondary">
-            {formatBytes(total)} on this device
-            {freeBytes !== null ? ` · ${formatBytes(freeBytes)} free` : ''}
-            {effectiveOffline ? ' · downloads only' : ''}
-          </Text>
-          <Text variant="caption" tone="tertiary">
-            New downloads:{' '}
-            {downloadQuality === 'original'
-              ? 'original files'
-              : downloadQuality === 'opus'
-                ? 'Opus 128 kbps'
-                : 'MP3 192 kbps'}
-          </Text>
-        </View>
-        {tracks.length ? (
-          <Button
-            label="Clear all"
-            size="sm"
-            variant="ghost"
-            onPress={() =>
-              void run(clearAll, 'Could not clear all downloads. Close any playing file and try again.')
-            }
-          />
-        ) : null}
-      </Surface>
-
-      <Text variant="caption" tone="tertiary">
-        Offline mode keeps Home and Library on downloaded music only. It is enabled
-        automatically when the device has no network.
-      </Text>
-      {actionError ? <ErrorNotice message={actionError} /> : null}
-
-      {activeDownloads.length ? (
-        <View style={styles.section}>
-          <Text variant="headline">Downloading</Text>
-          {activeDownloads.map((entry) => (
-            <ActiveDownloadRow key={entry.track.id} entry={entry} />
-          ))}
-        </View>
-      ) : null}
-
-      {collections.length ? (
-        <View style={styles.section}>
-          <Text variant="headline">Collections</Text>
-          {collections.map((collection) => (
-            <Surface key={collection.id} style={styles.collection} bordered>
-              {collection.coverArt ? (
-                <Artwork coverArt={collection.coverArt} size={42} radius={7} />
-              ) : (
-                <View style={[styles.collectionIcon, { backgroundColor: theme.colors.elevated2 }]}>
-                  <Download size={18} color={theme.colors.textSecondary} />
-                </View>
-              )}
-              <View style={styles.collectionText}>
-                <Text variant="callout" style={styles.strong} numberOfLines={1}>
-                  {collection.name}
+      <VirtualList
+        style={styles.fill}
+        data={downloadItems}
+        keyExtractor={downloadItemKey}
+        getItemType={(item) => item.kind}
+        contentContainerStyle={{ paddingBottom: chromeInset + 32 }}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={
+          <View style={styles.headerStack}>
+            <Surface style={styles.summary} bordered>
+              <View style={[styles.summaryIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                <HardDrive size={20} color={theme.colors.accent} />
+              </View>
+              <View style={styles.summaryText}>
+                <Text variant="headline">
+                  {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
                 </Text>
                 <Text variant="caption" tone="secondary">
-                  {collection.type} ·{' '}
-                  {collection.trackIds.filter((trackId) => Boolean(index.tracks[trackId])).length}/
-                  {collection.trackIds.length} tracks
+                  {formatBytes(total)} on this device
+                  {freeBytes !== null ? ` · ${formatBytes(freeBytes)} free` : ''}
+                  {effectiveOffline ? ' · downloads only' : ''}
+                </Text>
+                <Text variant="caption" tone="tertiary">
+                  New downloads:{' '}
+                  {downloadQuality === 'original'
+                    ? 'original files'
+                    : downloadQuality === 'opus'
+                      ? 'Opus 128 kbps'
+                      : 'MP3 192 kbps'}
                 </Text>
               </View>
-              <IconButton
-                label={`Remove download ${collection.name}`}
-                size={36}
-                onPress={() =>
-                  void run(
-                    () => removeCollection(collection.id),
-                    `Could not remove ${collection.name}. Close any playing file and try again.`,
-                  )
-                }
-              >
-                <Trash2 size={17} color={theme.colors.textTertiary} />
-              </IconButton>
+              {tracks.length ? (
+                <Button
+                  label="Clear all"
+                  size="sm"
+                  variant="ghost"
+                  onPress={() =>
+                    void run(
+                      clearAll,
+                      'Could not clear all downloads. Close any playing file and try again.',
+                    )
+                  }
+                />
+              ) : null}
             </Surface>
-          ))}
-        </View>
-      ) : null}
 
-      {looseTracks.length ? (
-        <View style={styles.section}>
-          <Text variant="headline">Tracks</Text>
-          <Text variant="caption" tone="tertiary">
-            Tracks that are not part of a downloaded album or playlist.
-          </Text>
-          {looseTracks.map((entry) => (
-            <PressableScale key={entry.track.id} style={styles.trackRow} haptic={false}>
-              <Artwork coverArt={entry.track.coverArt} size={42} radius={7} />
-              <View style={styles.trackText}>
-                <Text variant="callout" numberOfLines={1} style={styles.strong}>
-                  {entry.track.title}
-                </Text>
-                <Text variant="caption" tone="secondary" numberOfLines={1}>
-                  {entry.track.artist ?? 'Unknown artist'}
-                  {entry.track.duration ? ` · ${formatDurationLong(entry.track.duration)}` : ''}
-                </Text>
-              </View>
-              <Text variant="caption" tone="tertiary">
-                {formatBytes(entry.size)}
-              </Text>
-              <IconButton
-                label={`Remove ${entry.track.title} download`}
-                size={34}
-                onPress={() =>
-                  void run(
-                    () => removeTrack(entry.track.id),
-                    `Could not remove ${entry.track.title}. Close any playing file and try again.`,
-                  )
-                }
-              >
-                <Trash2 size={16} color={theme.colors.textTertiary} />
-              </IconButton>
-            </PressableScale>
-          ))}
-        </View>
-      ) : null}
+            {offlineLimitBytes && total > offlineLimitBytes ? (
+              <Surface style={styles.summary} bordered>
+                <View style={styles.summaryText}>
+                  <Text variant="headline">Over the download budget</Text>
+                  <Text variant="caption" tone="secondary">
+                    {formatBytes(total)} of {formatBytes(offlineLimitBytes)} used ·{' '}
+                    {formatBytes(total - offlineLimitBytes)} over
+                  </Text>
+                </View>
+                <Button
+                  label="Free up space"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() =>
+                    void run(
+                      () => freeUpSpace(queueIds).then(() => undefined),
+                      'Could not free up space. Close any playing file and try again.',
+                    )
+                  }
+                />
+              </Surface>
+            ) : null}
 
-      {!tracks.length && !collections.length && !activeDownloads.length ? (
-        <EmptyState
-          title="No downloads yet"
-          message="Open an album or playlist and choose Download to keep the original files on this device."
-          icon={<Download size={30} color={theme.colors.textTertiary} />}
-        />
-      ) : null}
+            <Text variant="caption" tone="tertiary">
+              Offline mode keeps Home and Library on downloaded music only. It is enabled
+              automatically when the device has no network.
+            </Text>
+            {actionError ? <ErrorNotice message={actionError} /> : null}
+          </View>
+        }
+        renderItem={({ item }) => {
+          switch (item.kind) {
+            case 'section':
+              return (
+                <View style={styles.sectionHeader}>
+                  <Text variant="headline">{item.title}</Text>
+                  {item.subtitle ? (
+                    <Text variant="caption" tone="tertiary">
+                      {item.subtitle}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            case 'active':
+              return (
+                <View style={styles.rowWrap}>
+                  <ActiveDownloadRow entry={item.entry} />
+                </View>
+              );
+            case 'collection':
+              return (
+                <View style={styles.rowWrap}>
+                  <Surface style={styles.collection} bordered>
+                    {item.collection.coverArt ? (
+                      <Artwork coverArt={item.collection.coverArt} size={42} radius={7} />
+                    ) : (
+                      <View
+                        style={[
+                          styles.collectionIcon,
+                          { backgroundColor: theme.colors.elevated2 },
+                        ]}
+                      >
+                        <Download size={18} color={theme.colors.textSecondary} />
+                      </View>
+                    )}
+                    <View style={styles.collectionText}>
+                      <Text variant="callout" style={styles.strong} numberOfLines={1}>
+                        {item.collection.name}
+                      </Text>
+                      <Text variant="caption" tone="secondary">
+                        {item.collection.type} ·{' '}
+                        {
+                          item.collection.trackIds.filter((trackId) =>
+                            Boolean(index.tracks[trackId]),
+                          ).length
+                        }
+                        /{item.collection.trackIds.length} tracks ·{' '}
+                        {formatBytes(
+                          item.collection.trackIds.reduce(
+                            (sum, trackId) => sum + (index.tracks[trackId]?.size ?? 0),
+                            0,
+                          ),
+                        )}
+                      </Text>
+                    </View>
+                    <IconButton
+                      label={`Remove download ${item.collection.name}`}
+                      size={36}
+                      onPress={() =>
+                        void run(
+                          () => removeCollection(item.collection.id),
+                          `Could not remove ${item.collection.name}. Close any playing file and try again.`,
+                        )
+                      }
+                    >
+                      <Trash2 size={17} color={theme.colors.textTertiary} />
+                    </IconButton>
+                  </Surface>
+                </View>
+              );
+            case 'track':
+              return (
+                <View style={styles.rowWrap}>
+                  <PressableScale style={styles.trackRow} haptic={false}>
+                    <Artwork coverArt={item.entry.track.coverArt} size={42} radius={7} />
+                    <View style={styles.trackText}>
+                      <Text variant="callout" numberOfLines={1} style={styles.strong}>
+                        {item.entry.track.title}
+                      </Text>
+                      <Text variant="caption" tone="secondary" numberOfLines={1}>
+                        {item.entry.track.artist ?? 'Unknown artist'}
+                        {item.entry.track.duration
+                          ? ` · ${formatDurationLong(item.entry.track.duration)}`
+                          : ''}
+                      </Text>
+                    </View>
+                    <Text variant="caption" tone="tertiary">
+                      {formatBytes(item.entry.size)}
+                    </Text>
+                    <IconButton
+                      label={`Remove ${item.entry.track.title} download`}
+                      size={34}
+                      onPress={() =>
+                        void run(
+                          () => removeTrack(item.entry.track.id),
+                          `Could not remove ${item.entry.track.title}. Close any playing file and try again.`,
+                        )
+                      }
+                    >
+                      <Trash2 size={16} color={theme.colors.textTertiary} />
+                    </IconButton>
+                  </PressableScale>
+                </View>
+              );
+            case 'empty':
+              return (
+                <EmptyState
+                  title="No downloads yet"
+                  message="Open an album or playlist and choose Download to keep the original files on this device."
+                  icon={<Download size={30} color={theme.colors.textTertiary} />}
+                />
+              );
+          }
+        }}
+      />
     </Screen>
   );
 }
+
 
 const styles = StyleSheet.create({
   summary: {
@@ -295,8 +380,20 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
-  section: {
-    gap: 8,
+  fill: {
+    flex: 1,
+  },
+  headerStack: {
+    gap: 16,
+    marginBottom: 16,
+  },
+  rowWrap: {
+    marginBottom: 8,
+  },
+  sectionHeader: {
+    gap: 2,
+    marginTop: 10,
+    marginBottom: 6,
   },
   activeRow: {
     flexDirection: 'row',

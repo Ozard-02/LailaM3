@@ -314,20 +314,8 @@ Commands, current counts, codec/browser matrices and device status live in
 - Android: APK/AAB via EAS.
 - Desktop native packaging: **FUORI SCOPE v1**; revisit Tauri later only if needed.
 
-## 15. Plugin system (future, out of v1)
+## 15. Extensions (out of scope v1)
 
-Laila keeps extension points in mind, but v1 ships no plugin runtime or marketplace.
-No remote code loading (hard rules 2 and 8).
-
-- A plugin is a bundled module implementing a typed contract (manifest + lifecycle),
-  disabled by default and configured by the user.
-- Capabilities are declared and least-privilege: library sources, download providers,
-  scrobblers, lyrics providers, metadata enrichers, playback outputs, UI slots,
-  background tasks, commands.
-- Plugins receive a capability-gated context (library, player, queue, settings,
-  namespaced storage, network scoped to declared endpoints, i18n); they never import
-  core internals or screens.
-- Secrets and endpoints are user-configured and redacted like auth credentials.
-- Example connector: an external downloader (spoty_loop-style) owns its protocol and
-  contributes an action such as "send to downloader"; core stays unaware.
-- v1 may expose the extension points; full runtime and bundled connectors are v2.
+Laila v1 ships no plugin runtime, marketplace or remote code loading. Any future
+integration must stay bundled and reviewed; the core does not expose public
+extension points yet.

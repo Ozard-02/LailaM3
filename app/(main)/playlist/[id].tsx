@@ -1,11 +1,11 @@
 import { useLocalSearchParams } from 'expo-router';
 import { ListPlus, Pin, Play, Search as SearchIcon, Shuffle, X } from '@/ui/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { AddToPlaylistSheet } from '@/components/AddToPlaylistSheet';
 import { isPlaylistExclusive, withExclusiveComment } from '@/core/exclusions';
-import { matchesSearch } from '@/core/search/text';
-import { usePinyinReady } from '@/hooks/usePinyinReady';
+import { filterSearch } from '@/core/search/text';
+import { useSearchIndex } from '@/hooks/useSearchIndex';
 import { updatePlaylist } from '@/core/subsonic/client';
 import { invalidateExclusions } from '@/services/exclusions';
 import { invalidatePlaylistQueries } from '@/services/query';
@@ -34,6 +34,10 @@ import { Skeleton } from '@/ui/Skeleton';
 import { Text } from '@/ui/Text';
 import { formatDurationLong, trackCount } from '@/utils/format';
 
+/** Stable identity: a new `[]` on every render would rebuild the search index. */
+const EMPTY_TRACKS: Track[] = [];
+const trackValues = (track: Track) => [track.title, track.artist, track.album];
+
 export default function PlaylistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const theme = useTheme();
@@ -57,11 +61,11 @@ export default function PlaylistScreen() {
   const offlineIndex = useOfflineStore((state) => state.index);
   const pinned = usePinsStore((state) => state.playlists.some((item) => item.id === id));
   const togglePlaylistPin = usePinsStore((state) => state.togglePlaylist);
-  const offlinePlaylist = offline
-    ? offlinePlaylists(offlineIndex).find((item) => item.id === id)
-    : undefined;
+  const offlinePlaylist = useMemo(
+    () => (offline ? offlinePlaylists(offlineIndex).find((item) => item.id === id) : undefined),
+    [offline, offlineIndex, id],
+  );
   const [filter, setFilter] = useState('');
-  usePinyinReady(); // re-filter once CJK romanisation has loaded
   const [playlistTracks, setPlaylistTracks] = useState<Track[] | null>(null);
   const [exclusiveBusy, setExclusiveBusy] = useState(false);
   const [exclusiveError, setExclusiveError] = useState<string | null>(null);
@@ -82,6 +86,11 @@ export default function PlaylistScreen() {
     }
     return () => resetArtwork();
   }, [activePlaylist?.coverArt, server, setArtworkFromUrl, resetArtwork]);
+
+  // Hooks stay above the early returns. The index is built once per playlist
+  // and reused for every keystroke in the filter.
+  const songs = activePlaylist?.songs ?? EMPTY_TRACKS;
+  const songIndex = useSearchIndex(songs, trackValues);
 
   if (!offline && playlist.isLoading) {
     return (
@@ -125,13 +134,10 @@ export default function PlaylistScreen() {
   }
 
   const data = activePlaylist;
-  const songs = data.songs ?? [];
   const total = songs.reduce((sum, track) => sum + (track.duration ?? 0), 0);
   const downloadEstimate = estimateDownloadBytes(songs, downloadQuality);
   const query = filter.trim();
-  const visibleSongs = query
-    ? songs.filter((track) => matchesSearch([track.title, track.artist, track.album], query))
-    : songs;
+  const visibleSongs = query ? filterSearch(songIndex, query) : songs;
 
   const username = server?.username;
   const exclusive = username ? isPlaylistExclusive(data, username) : false;

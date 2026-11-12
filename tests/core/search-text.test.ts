@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildSearchIndex,
+  filterSearch,
   foldSearchText,
   hasCjk,
   isPinyinReady,
@@ -52,5 +54,39 @@ describe('search text folding', () => {
   it('does not try to romanise plain Latin text', () => {
     expect(matchesSearch(['Blue Hour'], 'blue')).toBe(true);
     expect(matchesSearch(['Blue Hour'], 'blu')).toBe(true);
+  });
+});
+
+describe('precomputed search index', () => {
+  // Built inside the tests: CJK values must not load pinyin at import time.
+  const albums = () => [
+    { name: 'A Quiet Place', artist: 'Sigur Rós' },
+    { name: 'Blue Hour', artist: '周杰伦' },
+    { name: 'Straße', artist: 'Neu!' },
+  ];
+  const build = () => buildSearchIndex(albums(), (album) => [album.name, album.artist]);
+
+  it('matches the same tokens as matchesSearch', () => {
+    const index = build();
+    expect(filterSearch(index, 'quiet place').map((album) => album.name)).toEqual([
+      'A Quiet Place',
+    ]);
+    expect(filterSearch(index, 'ros').map((album) => album.name)).toEqual(['A Quiet Place']);
+    expect(filterSearch(index, 'strasse').map((album) => album.name)).toEqual(['Straße']);
+    expect(filterSearch(index, 'beatles')).toEqual([]);
+    expect(filterSearch(index, '')).toEqual(albums());
+  });
+
+  it('reuses the folded haystack across queries', () => {
+    const index = build();
+    const haystack = index[1]?.haystack;
+    filterSearch(index, 'blue');
+    filterSearch(index, 'zhou');
+    expect(index[1]?.haystack).toBe(haystack);
+  });
+
+  it('includes pinyin forms once the index is built after loading', async () => {
+    await loadPinyin();
+    expect(filterSearch(build(), 'zjl').map((album) => album.name)).toEqual(['Blue Hour']);
   });
 });

@@ -1,4 +1,5 @@
 import { Directory, DownloadTask, File, Paths } from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { md5 } from 'js-md5';
 import type { OfflineTrack } from '@/core/offline';
 import type {
@@ -13,6 +14,11 @@ function safeName(trackId: string, extension: string): string {
   const ext = extension.replace(/[^a-zA-Z0-9]/g, '') || 'bin';
   return `${base}.${ext}`;
 }
+
+/** Re-encode covers above this size; smaller files are already cheap. */
+const COVER_RECOMPRESS_BYTES = 120_000;
+/** Visually lossless for artwork; do not lower without a visual check. */
+const COVER_JPEG_QUALITY = 0.9;
 
 const downloads = new Directory(Paths.document, 'laila-downloads');
 const covers = new Directory(Paths.document, 'laila-covers');
@@ -143,16 +149,37 @@ export class NativeOfflineFiles implements OfflineFiles {
     const destination = coverFile(coverArtId);
     if (destination.exists) return { uri: destination.uri, size: destination.size };
     const file = await File.downloadFileAsync(url, destination, { headers });
-    return file ? { uri: file.uri, size: file.size } : null;
+    if (!file) return null;
+
+    // The server already caps the requested size; large files are usually PNG
+    // covers. Re-encode those once to JPEG q0.90: visually lossless for art,
+    // and it normalises the format so the stored file is a real JPEG.
+    if (file.size <= COVER_RECOMPRESS_BYTES) {
+      return { uri: file.uri, size: file.size };
+    }
+    try {
+      const result = await manipulateAsync(file.uri, [], {
+        compress: COVER_JPEG_QUALITY,
+        format: SaveFormat.JPEG,
+      });
+      const temp = new File(result.uri);
+      if (destination.exists) destination.delete();
+      await temp.move(destination);
+      const saved = new File(destination.uri);
+      return { uri: saved.uri, size: saved.size };
+    } catch {
+      // Keep the original download if the re-encode fails.
+      return { uri: file.uri, size: file.size };
+    }
+  }
+
+  async coverExists(coverArtId: string): Promise<boolean> {
+    return coverFile(coverArtId).exists;
   }
 
   async removeCover(coverArtId: string): Promise<void> {
     const file = coverFile(coverArtId);
     if (file.exists) file.delete();
-  }
-
-  async coverExists(coverArtId: string): Promise<boolean> {
-    return coverFile(coverArtId).exists;
   }
 
   async listAudio(): Promise<LocalOfflineFile[]> {

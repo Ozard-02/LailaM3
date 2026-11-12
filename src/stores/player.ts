@@ -1,11 +1,13 @@
+import { createCoalescedJSONStorage } from '@/adapters/storage/coalesced';
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import type { Track } from '@/core/models';
 import {
   applyTrackPatches,
   currentTrack as selectCurrentTrack,
   emptyQueue,
   queueReducer,
+  shuffled,
   type QueueAction,
   type QueueState,
   type RepeatMode,
@@ -113,11 +115,22 @@ export interface PlayerState {
   _handleAutoAdvance: (mediaId?: string) => void;
 }
 
-const storage = createJSONStorage(() => ({
-  getItem: (name) => appStore.get(name),
-  setItem: (name, value) => appStore.set(name, value),
-  removeItem: (name) => appStore.remove(name),
-}));
+type PlayerPersisted = { queueState: QueueState; volume: number };
+
+const storage = createCoalescedJSONStorage<PlayerPersisted>(
+  {
+    getItem: (name) => appStore.get(name),
+    setItem: (name, value) => appStore.set(name, value),
+    removeItem: (name) => appStore.remove(name),
+  },
+  {
+    // Position, buffered and duration change 2–4×/s but are not persisted.
+    // Comparing the queue reference keeps the whole queue out of the write
+    // path: 11 ms of JSON per tick with a 10k-track queue.
+    changed: (next, previous) =>
+      next.queueState !== previous.queueState || next.volume !== previous.volume,
+  },
+);
 
 const RADIO_BATCH = 40;
 const RADIO_LOW_WATER = 8;
@@ -529,7 +542,7 @@ export const usePlayerStore = create<PlayerState>()(
             }
           }
           if (allowed.length === 0) return false;
-          await get().playTracks([...allowed].sort(() => Math.random() - 0.5), 0);
+          await get().playTracks(shuffled(allowed), 0);
           return true;
         },
 
@@ -543,7 +556,7 @@ export const usePlayerStore = create<PlayerState>()(
               radioMode: false,
               queueState: queueReducer(get().queueState, {
                 type: 'play',
-                tracks: [...tracks].sort(() => Math.random() - 0.5),
+                tracks: shuffled(tracks),
                 startIndex: 0,
               }),
             });
@@ -753,29 +766,34 @@ export const usePlayerStore = create<PlayerState>()(
             }
           }
 
+          // The native queue is only an OS-facing mirror. Remove the trashed
+          // entries in place: reloading the whole queue here restarted the
+          // current track and paused the one `next()` had just started.
+          // Positions are read after the skip so an Up next insertion is
+          // already reflected; highest first keeps the other indexes valid.
+          const enginePositions = get().queueState.queue.reduce<number[]>(
+            (positions, item, position) => {
+              if (item.id === track.id) positions.push(position);
+              return positions;
+            },
+            [],
+          );
           set((current) => ({
             queueState: removeTrackEverywhere(current.queueState, track.id),
           }));
-          if (get().queueState.queue.length === 0) {
-            set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
-          } else {
-            const nextQueue = get().queueState;
-            const nextTrack = selectCurrentTrack(nextQueue);
-            if (nextTrack && audioEngine.setQueue) {
-              const position = get().position;
-              const playing = get().status === 'playing';
+          if (audioEngine.removeQueueItem) {
+            for (const position of enginePositions.reverse()) {
               try {
-                await audioEngine.setQueue(
-                  nextQueue.queue.map((item) => sourceFor(item)),
-                  nextQueue.index,
-                );
-                if (position > 0) await audioEngine.seek(position);
-                if (playing) await audioEngine.play();
-                else await audioEngine.pause();
+                await audioEngine.removeQueueItem(position, track.id);
               } catch (error) {
-                logger.warn('Could not sync the queue after trashing a track', { error });
+                logger.warn('Could not remove the trashed track from the native queue', {
+                  error,
+                });
               }
             }
+          }
+          if (get().queueState.queue.length === 0) {
+            set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
           }
 
           // Delete the local copy only after playback has moved off it.

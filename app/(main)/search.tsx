@@ -1,5 +1,5 @@
 import { Search as SearchIcon, X } from '@/ui/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { AlbumGrid } from '@/components/AlbumGrid';
 import { ArtistRow } from '@/components/ArtistRow';
@@ -7,8 +7,9 @@ import { Screen } from '@/components/Screen';
 import { SectionHeader } from '@/components/SectionHeader';
 import { TrackRow } from '@/components/TrackRow';
 import { useAlbumPages, useArtists, useSearch } from '@/hooks/useLibrary';
-import { matchesSearch } from '@/core/search/text';
-import { usePinyinReady } from '@/hooks/usePinyinReady';
+import type { Album, Artist } from '@/core/models';
+import { filterSearch } from '@/core/search/text';
+import { useSearchIndex } from '@/hooks/useSearchIndex';
 import { usePlayerStore } from '@/stores/player';
 import { useTheme } from '@/theme/ThemeProvider';
 import { EmptyState } from '@/ui/EmptyState';
@@ -18,6 +19,9 @@ import { Input } from '@/ui/Input';
 import { Skeleton } from '@/ui/Skeleton';
 import { Button } from '@/ui/Button';
 import { Text } from '@/ui/Text';
+
+const albumValues = (album: Album) => [album.name, album.artist];
+const artistValues = (artist: Artist) => [artist.name];
 
 export default function SearchScreen() {
   const theme = useTheme();
@@ -42,16 +46,19 @@ export default function SearchScreen() {
     void fetchNextPage();
   }, [deep, fetchNextPage, hasNextPage, isFetchingNextPage]);
 
-  usePinyinReady(); // re-filter once CJK romanisation has loaded
   const result = search.data;
-  const allDeepAlbumMatches = deep
-    ? (deepAlbums.data?.pages.flat() ?? []).filter((album) =>
-        matchesSearch([album.name, album.artist], query),
-      )
-    : [];
-  const allDeepArtistMatches = deep
-    ? (deepArtists.data ?? []).filter((artist) => matchesSearch([artist.name], query))
-    : [];
+  const deepAlbumData = useMemo(
+    () => (deep ? (deepAlbums.data?.pages.flat() ?? []) : []),
+    [deep, deepAlbums.data],
+  );
+  const deepArtistData = useMemo(
+    () => (deep ? (deepArtists.data ?? []) : []),
+    [deep, deepArtists.data],
+  );
+  const deepAlbumIndex = useSearchIndex(deepAlbumData, albumValues);
+  const deepArtistIndex = useSearchIndex(deepArtistData, artistValues);
+  const allDeepAlbumMatches = filterSearch(deepAlbumIndex, query);
+  const allDeepArtistMatches = filterSearch(deepArtistIndex, query);
   // Keep a broad pinyin query from mounting hundreds of cards inside the
   // Search screen's ScrollView; the user can refine instead.
   const deepAlbumMatches = allDeepAlbumMatches.slice(0, 100);

@@ -14,6 +14,8 @@ export interface VirtualListProps<T> {
   style?: StyleProp<ViewStyle>;
   onEndReached?: () => void;
   onEndReachedThreshold?: number;
+  /** FlashList v2 recycles by type; stable ids keep rows from remounting. */
+  getItemType?: (item: T, index: number) => string | number | undefined;
   showsVerticalScrollIndicator?: boolean;
   testID?: string;
 }
@@ -31,6 +33,7 @@ export function VirtualList<T>({
   style,
   onEndReached,
   onEndReachedThreshold,
+  getItemType,
   showsVerticalScrollIndicator = false,
   testID,
 }: VirtualListProps<T>) {
@@ -47,6 +50,7 @@ export function VirtualList<T>({
       style={style}
       onEndReached={onEndReached}
       onEndReachedThreshold={onEndReachedThreshold}
+      getItemType={getItemType}
       showsVerticalScrollIndicator={showsVerticalScrollIndicator}
       testID={testID}
     />

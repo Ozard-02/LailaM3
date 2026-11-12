@@ -13,23 +13,27 @@ npm test              # Vitest unit tests
 npm run test:e2e      # Playwright default matrix
 npm run test:e2e:all  # full desktop × mobile matrix
 npm run build:web     # production web export
+npm run profile:core  # large-input core benchmark (not part of `npm test`)
 ```
 
-## Current baseline — 2026-11-10
+## Current baseline — 2026-11-12
 
-- **121 unit tests** in 21 files.
-- **63 default E2E checks**: 49 Chromium desktop, 13 mobile checks and one
+- **154 unit tests** in 27 files.
+- **66 default E2E checks** across Chromium desktop, the mobile viewport and one
   Firefox seek check.
-- `FULL_E2E=1` was not re-measured after the queue-trash pass.
+- `FULL_E2E=1` was not re-measured after the queue/player pass.
 - Typecheck and lint are clean; the web export builds.
-- Android release builds; the Media3 device matrix is pending.
+- Android release builds; the Media3 device matrix is pending. The new native
+  queue removal has not been smoke-tested on hardware yet.
 
 ## Unit coverage
 
 Vitest covers the pure core: queue transitions and stress, Subsonic schemas,
-retry/backoff and redaction, offline index/integrity/recovery, server switching,
-Segue state/handoff, DLNA parsing, storage recovery/migration, query-key scoping,
-download-progress throttling and queue-trash snapshot/remove/restore.
+retry/backoff and redaction, offline index/integrity/recovery/batch removal,
+precomputed search index, coalesced persist storage, server switching, Segue
+state/handoff, DLNA parsing, storage recovery/migration, query-key scoping,
+download-progress throttling, queue-trash snapshot/remove/restore, the
+player-store trash path, and the large-input `profile:core` harness targets.
 
 ## E2E coverage
 
@@ -46,6 +50,10 @@ Playwright runs against the bundled mock server; it never holds real credentials
 - Keyboard, focus, player-dialog and skip-link checks are part of the desktop
   suite.
 - Media Session metadata and `playing` state are asserted after playback starts.
+- `queue-align.spec.ts` plays the last album track and asserts that opening and
+  reopening the queue puts it at the top without a late scroll, that the row is
+  already aligned while the sheet is still rising, and that the closed sheet is
+  inert, on desktop and mobile.
 
 ## Codec matrix
 

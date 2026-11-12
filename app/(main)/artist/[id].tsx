@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { AlbumGrid } from '@/components/AlbumGrid';
 import { BackButton } from '@/components/BackButton';
@@ -27,9 +27,10 @@ export default function ArtistScreen() {
   const server = useAuthStore((state) => state.server);
   const offline = useEffectiveOffline();
   const offlineIndex = useOfflineStore((state) => state.index);
-  const offlineArtist = offline
-    ? offlineArtists(offlineIndex).find((item) => item.id === id)
-    : undefined;
+  const offlineArtist = useMemo(
+    () => (offline ? offlineArtists(offlineIndex).find((item) => item.id === id) : undefined),
+    [offline, offlineIndex, id],
+  );
   const activeArtist = offline ? offlineArtist : artist.data;
 
   useEffect(() => {

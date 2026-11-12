@@ -40,6 +40,7 @@ type Subscription = { remove: () => void };
 interface LailaPlayerModule {
   setup(): Promise<void>;
   setQueue(items: LailaQueueItem[], startIndex: number): Promise<void>;
+  removeQueueItem(index: number, mediaId: string): Promise<void>;
   play(): Promise<void>;
   pause(): Promise<void>;
   seekTo(seconds: number): Promise<void>;

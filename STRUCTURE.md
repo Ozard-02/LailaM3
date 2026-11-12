@@ -25,11 +25,11 @@ laila/
 │   ├── adapters/            # native, web and storage implementations of the ports
 │   ├── services/            # wiring: query client, exclusions, storage, audio, network
 │   ├── stores/              # Zustand stores built on the pure core
-│   ├── hooks/               # React hooks for library, lyrics, free space, chrome
+│   ├── hooks/               # React hooks for library, search index, lyrics, free space, chrome
 │   ├── theme/               # tokens, palette extraction, light/dark theme
 │   ├── ui/                  # primitives and design-system components
 │   ├── components/          # feature components
-│   └── utils/               # formatting and haptics
+│   └── utils/               # formatting, haptics, download/search list items
 ├── modules/
 │   ├── dlna/                # local Expo module: SSDP discovery and AVTransport
 │   └── laila-player/        # local Expo module: Media3 playback and media session
@@ -37,6 +37,7 @@ laila/
 ├── scripts/                 # mock server and library profiler
 ├── tests/
 │   ├── core/                # Vitest unit tests
+│   ├── bench/               # large-input `profile:core` harness
 │   └── e2e/                 # Playwright desktop, mobile and Firefox checks
 ├── docs/                    # screenshots and public technical notes
 ├── assets/                  # bundled icons and splash images
@@ -45,7 +46,8 @@ laila/
 ├── package.json
 ├── playwright.config.ts
 ├── tsconfig.json
-└── vitest.config.ts
+├── vitest.config.ts
+└── vitest.bench.config.ts
 ```
 
 ## Layer rules
@@ -65,13 +67,14 @@ laila/
 
 ## Refactor rules
 
-- No new features during the refactor/efficiency pass; changes must preserve
-  user-visible behaviour.
+- Keep changes incremental and measured; preserve user-visible behaviour while
+  reducing CPU, memory, bundle or network cost.
 - Move pure logic down into `src/core`; keep adapters and stores thin.
 - Split files by responsibility, not by arbitrary line count. Audit before
   moving modules or renaming directories.
-- Measure before and after. Keep a change only when it reduces cost or clearly
-  improves organisation without regression.
+- Measure before and after with `npm run profile:core` or the library profiler;
+  keep a change only when it reduces cost or clearly improves organisation
+  without regression.
 - Do not implement a wholesale performance rewrite; cherry-pick only candidates
   that address a measured bottleneck.
 

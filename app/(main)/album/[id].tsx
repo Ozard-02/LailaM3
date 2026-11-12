@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ListMusic, ListPlus, ListStart, MoreHorizontal, Pin, Play, Shuffle, User, X } from '@/ui/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { AddToPlaylistSheet } from '@/components/AddToPlaylistSheet';
 import { BackButton } from '@/components/BackButton';
@@ -48,7 +48,10 @@ export default function AlbumScreen() {
   const offlineIndex = useOfflineStore((state) => state.index);
   const pinned = usePinsStore((state) => state.albums.some((item) => item.id === id));
   const toggleAlbumPin = usePinsStore((state) => state.toggleAlbum);
-  const offlineAlbum = offline ? offlineAlbums(offlineIndex).find((item) => item.id === id) : undefined;
+  const offlineAlbum = useMemo(
+    () => (offline ? offlineAlbums(offlineIndex).find((item) => item.id === id) : undefined),
+    [offline, offlineIndex, id],
+  );
   const [moreOpen, setMoreOpen] = useState(false);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [playlistTracks, setPlaylistTracks] = useState<Track[] | null>(null);
@@ -183,7 +186,7 @@ export default function AlbumScreen() {
           <MoreHorizontal size={20} color={theme.colors.text} />
         </IconButton>
       </View>
-      <View style={[styles.header, compact && styles.headerCompact]}>
+      <View style={[styles.header, compact && styles.headerCompact, !compact && styles.headerWide]}>
         <Artwork coverArt={data.coverArt} size={compact ? 180 : 230} radius={theme.radius.md} />
         <View style={styles.headerText}>
           <Text variant="label" tone="accent">
@@ -278,6 +281,10 @@ const styles = StyleSheet.create({
   headerCompact: {
     flexDirection: 'column',
     alignItems: 'flex-start',
+  },
+  /** Tablet/desktop: give the track list breathing room under the cover. */
+  headerWide: {
+    marginBottom: 24,
   },
   headerText: {
     flex: 1,

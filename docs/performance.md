@@ -141,6 +141,54 @@ waits for each new page; it is not the app's load time. The important result is
 that 5k albums no longer mean 5k mounted cards. Heap varies between runs (image
 decoding and GC), so treat it as an order of magnitude, not a precise figure.
 
+## Performance pass — 2026-11-10
+
+Only measured bottlenecks were changed. Repeatable harness:
+`npm run profile:core` (`tests/bench/core.bench.ts`, 20k tracks / 200
+collections / 5k albums). It prints a table and marks every case that misses its
+target.
+
+| Case | Before | After |
+|---|---|---|
+| `restoreManifestTracks` 5k manifests | 4 983 ms | **1.2 ms** |
+| `recoverOfflineIndex` 5k files | 4 303 ms | **1.7 ms** |
+| `removeCollection` 100-track album at 20k | 1 182 ms | **8 ms** |
+| `reconcileCollection`, 10 removals, 200 collections | 111 ms | **8 ms** |
+| `removeDownloadedTrack` one track at 20k | 12 ms | **6.3 ms** |
+| Native file stats during hydrate | 2–4 per download, sequential | 2 directory listings |
+| Persisted index write per finished download | 54 ms | 5.2 ms copy + one 19 ms write per 1 s window |
+| Persist serialisation per position tick (10k queue) | 11 ms | **0** (unchanged subset skipped) |
+| Local filter per keystroke, 20k items | 53.3 ms | **0.7–1.2 ms** |
+| Offline grouping in render (20k) | 26 ms per render | memoised on the index identity |
+
+Shape of the changes:
+
+- Offline index builders mutate one local copy and return once; batch removal
+  replaces per-track loops and `reconcileCollection` uses a `Set` of ids used
+  elsewhere.
+- `hydrate()` verifies downloads against one `listAudio()`/`listCovers()`
+  listing (sizes included) instead of statting every file repeatedly.
+- Coalesced JSON storage skips serialising an unchanged persisted subset and
+  batches changed writes; it flushes on background, `visibilitychange` and
+  `pagehide`.
+- Screens build a folded search index once per data change and scan it per
+  keystroke.
+- Offline album/artist/playlist/genre derivations are memoised on the index.
+
+Bundle after the pass: common 1.6 MB, entry 1.1 MB, pinyin 488 KB, `dist/` 3.6 MB
+— unchanged, as expected.
+
+Library profiler after the pass (same Chromium setup):
+
+| Albums | First grid | DOM cards | JS heap |
+|---|---|---|---|
+| 1 200 | 848 ms | 283 | 159 MB* |
+| 5 000 | 832 ms | 282 | 58 MB |
+| 10 000 | 855 ms | 322 | 58 MB |
+
+\* heap without a forced GC is noisy; read it as an order of magnitude. First
+grid is flat from 1.2k to 10k.
+
 ## Follow-ups
 
 - Profile a real Navidrome with 1000+ albums; the user treats this as working

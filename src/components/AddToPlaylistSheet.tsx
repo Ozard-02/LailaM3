@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Heart, Lock, Music2, Shuffle, X } from '@/ui/icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Track } from '@/core/models';
@@ -35,15 +35,20 @@ export function AddToPlaylistSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const uniqueTracks = tracks.filter(
-    (track, index, array) => array.findIndex((item) => item.id === track.id) === index,
-  );
+  const uniqueTracks = useMemo(() => {
+    const seen = new Set<string>();
+    return tracks.filter((track) => {
+      if (seen.has(track.id)) return false;
+      seen.add(track.id);
+      return true;
+    });
+  }, [tracks]);
   const allStarred = uniqueTracks.length > 0 && uniqueTracks.every((track) => track.starred);
   const title = uniqueTracks.length === 1 ? uniqueTracks[0]?.title : `${uniqueTracks.length} tracks`;
   const favouriteSelected = favouriteOverride ?? allStarred;
   const canApply = playlistOverrides.size > 0 || favouriteOverride !== null;
 
-  const visiblePlaylists = playlists.data ?? [];
+  const visiblePlaylists = useMemo(() => playlists.data ?? [], [playlists.data]);
   const membership = useQuery({
     queryKey: queryKeys.playlistMembership(
       server,
@@ -65,9 +70,24 @@ export function AddToPlaylistSheet({
     enabled: Boolean(server && visiblePlaylists.length > 0),
     staleTime: 0,
   });
-  const membershipById = new Map(
-    (membership.data ?? []).map((item) => [item.id, new Set(item.trackIds)]),
+  const membershipById = useMemo(
+    () => new Map((membership.data ?? []).map((item) => [item.id, new Set(item.trackIds)])),
+    [membership.data],
   );
+  // Count matches once per render instead of once per playlist row.
+  const presentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const playlist of visiblePlaylists) {
+      const contained = membershipById.get(playlist.id);
+      if (!contained) continue;
+      let count = 0;
+      for (const track of uniqueTracks) {
+        if (contained.has(track.id)) count += 1;
+      }
+      counts.set(playlist.id, count);
+    }
+    return counts;
+  }, [visiblePlaylists, membershipById, uniqueTracks]);
 
   const togglePlaylist = (id: string, initial: boolean) => {
     setPlaylistOverrides((current) => {
@@ -214,10 +234,7 @@ export function AddToPlaylistSheet({
           const excluded = Boolean(
             playlist.comment?.includes(`#${server?.username ?? ''}-exclusive`),
           );
-          const contained = membershipById.get(playlist.id);
-          const presentCount = contained
-            ? uniqueTracks.filter((track) => contained.has(track.id)).length
-            : 0;
+          const presentCount = presentCounts.get(playlist.id) ?? 0;
           const allPresent =
             uniqueTracks.length > 0 && presentCount === uniqueTracks.length;
           const initial = presentCount > 0;
