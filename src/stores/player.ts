@@ -1,7 +1,7 @@
 import { createCoalescedJSONStorage } from '@/adapters/storage/coalesced';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Track } from '@/core/models';
+import type { Album, Track } from '@/core/models';
 import {
   applyTrackPatches,
   currentTrack as selectCurrentTrack,
@@ -28,9 +28,14 @@ import { downloadedTracks, FAVOURITES_COLLECTION, nextDownloadedIndex } from '@/
 import { queryKeys, serverKey } from '@/core/queryKeys';
 import { getPlaylist, getRandomSongs, getSong, star, updatePlaylist } from '@/core/subsonic/client';
 import {
+  createTrashAlbumUndo,
   createTrashUndo,
+  removeTracksEverywhere,
   removeTrackEverywhere,
+  restoreTracksEverywhere,
   restoreTrackEverywhere,
+  type TrashAlbumOutcome,
+  type TrashAlbumUndo,
   type TrashOutcome,
   type TrashUndo,
   type TrashUndoResult,
@@ -89,6 +94,8 @@ export interface PlayerState {
   /** Trash a track from a library list, where there is no queue position. */
   trashLibraryTrack: (track: Track) => Promise<TrashOutcome>;
   undoTrash: (undo: TrashUndo) => Promise<TrashUndoResult>;
+  trashAlbum: (album: Album) => Promise<TrashAlbumOutcome>;
+  undoTrashAlbum: (undo: TrashAlbumUndo) => Promise<TrashUndoResult>;
   move: (from: number, to: number) => void;
   reorder: (tracks: Track[]) => void;
   applyRemoteQueue: (
@@ -838,6 +845,178 @@ export const usePlayerStore = create<PlayerState>()(
         trashLibraryTrack: async (track) => {
           const state = get().queueState;
           return trashOne(track, selectCurrentTrack(state)?.id === track.id);
+        },
+
+        trashAlbum: async (album) => {
+          const songs = album.songs ?? [];
+          if (songs.length === 0) return { ok: false, reason: 'not-found' };
+
+          const server = useAuthStore.getState().server;
+          if (!server) return { ok: false, reason: 'failed', message: 'Not signed in.' };
+          if (isOfflineNow()) return { ok: false, reason: 'offline' };
+
+          const playlistId =
+            useSettingsStore.getState().trashPlaylistIds[serverKey(server)];
+          if (!playlistId) return { ok: false, reason: 'no-playlist' };
+
+          const trackIds = songs.map((track) => track.id);
+          const trackIdSet = new Set(trackIds);
+          let addedTrackIds = new Set<string>();
+          try {
+            const playlist = await getPlaylist(server, playlistId);
+            const existing = new Set((playlist.songs ?? []).map((item) => item.id));
+            const missing = trackIds.filter((id) => !existing.has(id));
+            if (missing.length > 0) {
+              // updatePlaylist accepts repeated songIdToAdd parameters; the
+              // server adds the whole album in one request.
+              await updatePlaylist(server, playlistId, { songIdToAdd: missing });
+              addedTrackIds = new Set(missing);
+            }
+          } catch (error) {
+            logger.warn('Could not add album tracks to the trash playlist', { error });
+            return {
+              ok: false,
+              reason: 'failed',
+              message: 'Could not update the trash playlist.',
+            };
+          }
+
+          const state = get().queueState;
+          const before = selectCurrentTrack(state);
+          // Up next normally wins over the next queue track. If the playing
+          // track is part of the album, promote the first non-album up-next
+          // entry before removing the album, instead of stopping playback.
+          let baseState = state;
+          let baseCurrent = before;
+          while (
+            baseCurrent &&
+            trackIdSet.has(baseCurrent.id) &&
+            baseState.upNext.length > 0
+          ) {
+            baseState = queueReducer(baseState, { type: 'next' });
+            baseCurrent = selectCurrentTrack(baseState);
+          }
+          const undo = createTrashAlbumUndo(
+            baseState,
+            album.name,
+            songs,
+            server,
+            playlistId,
+            addedTrackIds,
+          );
+          const removals: { position: number; id: string }[] = [];
+          baseState.queue.forEach((item, position) => {
+            if (trackIdSet.has(item.id)) removals.push({ position, id: item.id });
+          });
+          const nextState = removeTracksEverywhere(baseState, trackIds);
+          const after = selectCurrentTrack(nextState);
+          set({ queueState: nextState });
+
+          if (before && !after) {
+            const cast = get().castTarget;
+            if (cast) {
+              stopCastPolling();
+              set({ castTarget: null });
+              void dlnaStop(cast).catch(() => undefined);
+            }
+            await audioEngine.pause();
+            set({ status: 'ended' });
+          } else if (before && after && before.id !== after.id) {
+            // The playing track was part of the album: load the next survivor
+            // once instead of walking next() through the trashed tracks.
+            await loadCurrent();
+          } else if (audioEngine.removeQueueItem) {
+            // Current playback is untouched; drop the album entries from the
+            // native queue in place, highest position first.
+            for (const item of removals.sort((a, b) => b.position - a.position)) {
+              try {
+                await audioEngine.removeQueueItem(item.position, item.id);
+              } catch (error) {
+                logger.warn('Could not remove an album track from the native queue', {
+                  error,
+                });
+              }
+            }
+          }
+          if (nextState.queue.length === 0) {
+            set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
+          }
+
+          let warning: string | undefined;
+          const starredTracks = songs.filter((track) => track.starred);
+          const offlineState = useOfflineStore.getState();
+          for (const track of starredTracks) {
+            try {
+              await star(server, track.id, { remove: true });
+              await offlineState.removeCollectionTrack(
+                FAVOURITES_COLLECTION.id,
+                track.id,
+              );
+            } catch (error) {
+              logger.warn('Could not remove an album track from favourites', {
+                error,
+              });
+              warning = 'Some favourites could not be removed.';
+            }
+          }
+          if (starredTracks.length > 0) {
+            await queryClient.invalidateQueries({
+              queryKey: queryKeys.starred(server),
+            });
+          }
+
+          for (const track of songs) {
+            if (!offlineState.isDownloaded(track.id)) continue;
+            try {
+              await offlineState.removeTrack(track.id);
+            } catch (error) {
+              logger.warn('Could not delete an album download', { error });
+              warning = warning ?? 'Some downloads could not be deleted.';
+            }
+          }
+
+          invalidatePlaylistQueries();
+          return { ok: true, undo, warning };
+        },
+
+        undoTrashAlbum: async (undo) => {
+          const first = undo.entries[0];
+          if (!first) return { ok: false, warning: 'Nothing to restore.' };
+
+          let warning: string | undefined;
+          const added = undo.entries.filter((entry) => entry.addedToPlaylist);
+          if (added.length > 0) {
+            try {
+              const playlist = await getPlaylist(first.server, first.playlistId);
+              const addedIds = new Set(added.map((entry) => entry.track.id));
+              const indexes = (playlist.songs ?? [])
+                .map((song, index) => ({ id: song.id, index }))
+                .filter((entry) => addedIds.has(entry.id))
+                .map((entry) => entry.index)
+                .sort((a, b) => b - a);
+              if (indexes.length > 0) {
+                await updatePlaylist(first.server, first.playlistId, {
+                  songIndexToRemove: indexes,
+                });
+              }
+              invalidatePlaylistQueries();
+              void refreshExcludedSongIds(first.server).catch((error) =>
+                logger.warn('Could not refresh shuffle exclusions after album undo', {
+                  error,
+                }),
+              );
+            } catch (error) {
+              logger.warn('Could not remove album tracks from the trash playlist', {
+                error,
+              });
+              warning = 'The trash playlist could not be updated.';
+            }
+          }
+
+          set((current) => ({
+            queueState: restoreTracksEverywhere(current.queueState, undo),
+          }));
+          return { ok: true, warning };
         },
 
         undoTrash: async (undo) => {

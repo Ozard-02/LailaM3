@@ -170,7 +170,7 @@ function extractEnvelope(data: unknown, endpoint: string): Json {
 async function request(
   config: ServerConfig,
   endpoint: string,
-  params: Record<string, string | number | boolean | string[] | undefined> = {},
+  params: Record<string, string | number | boolean | string[] | number[] | undefined> = {},
   signal?: AbortSignal,
 ): Promise<Json> {
   const url = buildUrl(config, endpoint, params);
@@ -333,7 +333,11 @@ export async function getPlaylist(
 export async function updatePlaylist(
   config: ServerConfig,
   id: string,
-  options: { songIdToAdd?: string; songIndexToRemove?: number; comment?: string },
+  options: {
+    songIdToAdd?: string | string[];
+    songIndexToRemove?: number | number[];
+    comment?: string;
+  },
   signal?: AbortSignal,
 ): Promise<void> {
   await request(

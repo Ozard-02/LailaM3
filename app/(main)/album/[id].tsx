@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ListMusic, ListPlus, ListStart, MoreHorizontal, Pin, Play, Shuffle, User, X } from '@/ui/icons';
+import { ListMusic, ListPlus, ListStart, MoreHorizontal, Pin, Play, Shuffle, Trash2, User, X } from '@/ui/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { AddToPlaylistSheet } from '@/components/AddToPlaylistSheet';
@@ -8,6 +8,7 @@ import { DownloadButton } from '@/components/DownloadButton';
 import { Screen } from '@/components/Screen';
 import { VirtualTrackList } from '@/components/VirtualTrackList';
 import { useAlbum } from '@/hooks/useLibrary';
+import { useTrashAlbumAction } from '@/hooks/useTrashAction';
 import type { Track } from '@/core/models';
 import { estimateDownloadBytes, offlineAlbums } from '@/core/offline';
 import { paletteCoverUrl } from '@/theme/palette';
@@ -53,6 +54,7 @@ export default function AlbumScreen() {
     [offline, offlineIndex, id],
   );
   const [moreOpen, setMoreOpen] = useState(false);
+  const trashAlbum = useTrashAlbumAction();
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [playlistTracks, setPlaylistTracks] = useState<Track[] | null>(null);
 
@@ -166,6 +168,14 @@ export default function AlbumScreen() {
           },
         ]
       : []),
+    {
+      label: 'Move album to Trash',
+      icon: <Trash2 size={18} color={theme.colors.danger} />,
+      onPress: () => {
+        setMoreOpen(false);
+        void trashAlbum(data);
+      },
+    },
     {
       label: 'Close',
       icon: <X size={18} color={theme.colors.textSecondary} />,

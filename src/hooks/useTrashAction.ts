@@ -1,26 +1,29 @@
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import type { Track } from '@/core/models';
-import type { TrashOutcome } from '@/core/trash';
+import type { Album, Track } from '@/core/models';
+import type { TrashAlbumOutcome, TrashOutcome, TrashUndoResult } from '@/core/trash';
 import { usePlayerStore } from '@/stores/player';
 import { useUIStore } from '@/stores/ui';
 
+type AnyTrashOutcome = TrashOutcome | TrashAlbumOutcome;
+
 /**
- * Shared Trash feedback: queue rows and library rows use the same failure and
- * success toasts, so both entry points behave the same way.
+ * Shared Trash feedback: one set of failure and success toasts for queue rows,
+ * library rows and albums, so every entry point behaves the same way.
  */
 function useTrashFeedback() {
   const router = useRouter();
   const undoTrash = usePlayerStore((state) => state.undoTrash);
+  const undoTrashAlbum = usePlayerStore((state) => state.undoTrashAlbum);
   const showToast = useUIStore((state) => state.showToast);
 
   return useCallback(
-    async (run: () => Promise<TrashOutcome>) => {
-      let outcome: TrashOutcome;
+    async (run: () => Promise<AnyTrashOutcome>, noun: 'track' | 'album') => {
+      let outcome: AnyTrashOutcome;
       try {
         outcome = await run();
       } catch {
-        showToast({ message: 'Could not move the track to Trash.', tone: 'error' });
+        showToast({ message: `Could not move the ${noun} to Trash.`, tone: 'error' });
         return false;
       }
       if (!outcome.ok) {
@@ -34,21 +37,24 @@ function useTrashFeedback() {
           showToast({ message: 'Trash needs a connection.', tone: 'error' });
         } else {
           showToast({
-            message: outcome.message ?? 'Could not move the track to Trash.',
+            message: outcome.message ?? `Could not move the ${noun} to Trash.`,
             tone: 'error',
           });
         }
         return false;
       }
 
-      const title = outcome.undo.track.title;
+      const { undo, warning } = outcome;
+      const title = 'track' in undo ? undo.track.title : undo.albumName;
+      const restore = (): Promise<TrashUndoResult> =>
+        'track' in undo ? undoTrash(undo) : undoTrashAlbum(undo);
       showToast({
-        message: outcome.warning
-          ? `Moved “${title}” to Trash. ${outcome.warning}`
+        message: warning
+          ? `Moved “${title}” to Trash. ${warning}`
           : `Moved “${title}” to Trash.`,
         actionLabel: 'Undo',
         onAction: () => {
-          void undoTrash(outcome.undo).then((result) => {
+          void restore().then((result) => {
             if (result.warning) {
               showToast({ message: `Restored to queue. ${result.warning}`, tone: 'error' });
             }
@@ -57,7 +63,7 @@ function useTrashFeedback() {
       });
       return true;
     },
-    [router, showToast, undoTrash],
+    [router, showToast, undoTrash, undoTrashAlbum],
   );
 }
 
@@ -67,7 +73,7 @@ export function useTrashAction() {
   const feedback = useTrashFeedback();
 
   return useCallback(
-    (index: number) => feedback(() => trashTrack(index)),
+    (index: number) => feedback(() => trashTrack(index), 'track'),
     [feedback, trashTrack],
   );
 }
@@ -78,7 +84,18 @@ export function useTrashTrackAction() {
   const feedback = useTrashFeedback();
 
   return useCallback(
-    (track: Track) => feedback(() => trashLibraryTrack(track)),
+    (track: Track) => feedback(() => trashLibraryTrack(track), 'track'),
     [feedback, trashLibraryTrack],
+  );
+}
+
+/** Moves every track of an album to the configured Trash playlist. */
+export function useTrashAlbumAction() {
+  const trashAlbum = usePlayerStore((state) => state.trashAlbum);
+  const feedback = useTrashFeedback();
+
+  return useCallback(
+    (album: Album) => feedback(() => trashAlbum(album), 'album'),
+    [feedback, trashAlbum],
   );
 }

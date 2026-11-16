@@ -698,6 +698,7 @@ test.describe('Laila web app', () => {
     await page.getByRole('button', { name: 'More album options' }).click();
     await expect(page.getByRole('button', { name: 'Add album to queue' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add album to playlist' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Move album to Trash' })).toBeVisible();
   });
 
   test('marks playlists that already contain the track', async ({ page }) => {
@@ -965,6 +966,26 @@ test.describe('Laila web app', () => {
     await page.keyboard.press('Delete');
     await expect(page.getByText(/Moved “First Light” to Trash/)).toBeVisible();
     await expect(page.getByText('Slow Motion').first()).toBeVisible();
+  });
+
+  test('moves an album to Trash, restores it and keeps the queue @smoke', async ({
+    page,
+  }) => {
+    await login(page);
+    await setTrashPlaylist(page);
+    await page.goto('/album/al-1');
+    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
+
+    await page.getByRole('button', { name: 'More album options' }).click();
+    await page.getByRole('button', { name: 'Move album to Trash' }).click();
+    await expect(page.getByText(/Moved “Blue Hour” to Trash/)).toBeVisible();
+
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
+    await page.getByRole('button', { name: /Open queue/ }).first().click();
+    await expect(page.getByText(/4 tracks · drag to reorder/)).toBeVisible();
   });
 
   test('moves a library row to Trash from its menu and undoes it', async ({ page }) => {

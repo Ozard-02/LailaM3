@@ -12,16 +12,18 @@ Dated implementation history. Current status and priorities live in
   gone; adding to a playlist goes through the same menu, so one control serves
   touch, mouse, keyboard and screen readers (`accessibilityActions: more`).
 - Trash is now the same everywhere: `trashLibraryTrack(track)` shares the queue
-  path (`trashOne`) instead of being queue-position only, and one
-  `useTrashFeedback` helper gives queue rows and library rows the same failure
-  toasts and the same Undo.
+  path (`trashOne`) instead of being queue-position only, the album menu gained
+  **Move album to Trash** (`trashAlbum`/`undoTrashAlbum`, with the batch
+  `updatePlaylist` support in `client.ts`/`params.ts`), and one
+  `useTrashFeedback` helper gives queue rows, library rows and albums the same
+  failure toasts and the same Undo.
 - Horizontal swipes already applied the configured actions, but on the web a
   drag also landed as a click on the row, which replayed the whole album and
   wiped the queued track. `useSwipeRow` now reports when a press is the tail of
   a swipe (`consumeSwipePress`) and track and queue rows ignore that press.
-- Tests: three store tests for `trashLibraryTrack` and E2E for album-row swipe,
-  the long-press menu, the Library-search row (swipe + menu) and trashing a row
-  from its menu.
+- Tests: three store tests for `trashLibraryTrack`, five for `trashAlbum`, and
+  E2E for album-row swipe, the long-press menu, the Library-search row
+  (swipe + menu), trashing a row from its menu and trashing/restoring an album.
 
 ## 2026-11-12
 

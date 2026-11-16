@@ -72,7 +72,7 @@ export function normalizeBaseUrl(url: string): string {
 export function buildUrl(
   config: ServerConfig,
   endpoint: string,
-  params: Record<string, string | number | boolean | string[] | undefined> = {},
+  params: Record<string, string | number | boolean | string[] | number[] | undefined> = {},
 ): string {
   const base = normalizeBaseUrl(config.url);
   const search = new URLSearchParams();
@@ -85,7 +85,7 @@ export function buildUrl(
     // comment to clear the tag on the server.
     if (value === '' && key !== 'comment') continue;
     if (Array.isArray(value)) {
-      for (const item of value) search.append(key, item);
+      for (const item of value) search.append(key, String(item));
     } else {
       search.set(key, String(value));
     }

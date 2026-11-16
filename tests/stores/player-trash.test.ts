@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ServerConfig, Track } from '@/core/models';
+import type { Album, ServerConfig, Track } from '@/core/models';
 import { emptyOfflineIndex } from '@/core/offline';
 import type { QueueState } from '@/core/queue/reducer';
 import { serverKey } from '@/core/queryKeys';
@@ -62,6 +62,10 @@ const server: ServerConfig = {
 
 function track(id: string): Track {
   return { id, title: `Track ${id}` };
+}
+
+function album(name: string, ids: string[]): Album {
+  return { id: `al-${name}`, name, songs: ids.map(track) };
 }
 
 function queueState(ids: string[], index: number): QueueState {
@@ -242,5 +246,130 @@ describe('trashLibraryTrack', () => {
     expect(outcome).toEqual({ ok: false, reason: 'no-playlist' });
     expect(mocks.updatePlaylist).not.toHaveBeenCalled();
     expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual(['a']);
+  });
+});
+
+describe('trashAlbum', () => {
+  it('batches missing tracks into the playlist and removes the album in place', async () => {
+    mocks.getPlaylist.mockResolvedValueOnce({ songs: [{ id: 'a' }] });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b', 'c'], 0),
+      status: 'playing',
+      position: 18,
+    });
+
+    const outcome = await usePlayerStore
+      .getState()
+      .trashAlbum(album('Album', ['b']));
+
+    expect(outcome.ok).toBe(true);
+    expect(mocks.updatePlaylist).toHaveBeenCalledWith(server, 'trash', {
+      songIdToAdd: ['b'],
+    });
+    expect(mocks.removeQueueItem).toHaveBeenCalledWith(1, 'b');
+    expect(mocks.setQueue).not.toHaveBeenCalled();
+    expect(mocks.pause).not.toHaveBeenCalled();
+
+    const queue = usePlayerStore.getState().queueState;
+    expect(queue.queue.map((item) => item.id)).toEqual(['a', 'c']);
+    expect(queue.index).toBe(0);
+    expect(usePlayerStore.getState().status).toBe('playing');
+  });
+
+  it('loads the next surviving track once when the album includes the current one', async () => {
+    mocks.getPlaylist.mockResolvedValueOnce({ songs: [] });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b', 'c', 'd'], 1),
+      status: 'playing',
+      position: 30,
+    });
+
+    const outcome = await usePlayerStore
+      .getState()
+      .trashAlbum(album('Album', ['b', 'c']));
+
+    expect(outcome.ok).toBe(true);
+    expect(mocks.setQueue).toHaveBeenCalledTimes(1);
+    expect(mocks.setQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+    expect(mocks.play).toHaveBeenCalledTimes(1);
+    expect(mocks.removeQueueItem).not.toHaveBeenCalled();
+
+    const queue = usePlayerStore.getState().queueState;
+    expect(queue.queue.map((item) => item.id)).toEqual(['a', 'd']);
+    expect(queue.index).toBe(1);
+    expect(queue.queue[queue.index]?.id).toBe('d');
+  });
+
+  it('promotes an up-next track instead of stopping when the album was playing', async () => {
+    mocks.getPlaylist.mockResolvedValueOnce({ songs: [] });
+    const state = queueState(['a', 'b'], 0);
+    state.upNext = [track('u')];
+    usePlayerStore.setState({ queueState: state, status: 'playing', position: 18 });
+
+    const outcome = await usePlayerStore
+      .getState()
+      .trashAlbum(album('Album', ['a']));
+
+    expect(outcome.ok).toBe(true);
+    expect(mocks.setQueue).toHaveBeenCalledTimes(1);
+    expect(mocks.setQueue).toHaveBeenCalledWith(expect.any(Array), 0);
+    expect(mocks.play).toHaveBeenCalledTimes(1);
+    const queue = usePlayerStore.getState().queueState;
+    expect(queue.queue.map((item) => item.id)).toEqual(['u', 'b']);
+    expect(queue.queue[queue.index]?.id).toBe('u');
+    expect(queue.upNext).toEqual([]);
+  });
+
+  it('restores the whole album and removes only the tracks it added', async () => {
+    mocks.getPlaylist
+      .mockResolvedValueOnce({ songs: [{ id: 'a' }] })
+      .mockResolvedValueOnce({ songs: [{ id: 'b' }, { id: 'a' }] });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b', 'c'], 0),
+      status: 'playing',
+      position: 18,
+    });
+
+    const outcome = await usePlayerStore
+      .getState()
+      .trashAlbum(album('Album', ['a', 'b']));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    await usePlayerStore.getState().undoTrashAlbum(outcome.undo);
+
+    expect(mocks.updatePlaylist).toHaveBeenLastCalledWith(server, 'trash', {
+      songIndexToRemove: [0],
+    });
+    expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    // Playback stays on the surviving track c, now back at its original index.
+    expect(usePlayerStore.getState().queueState.index).toBe(2);
+    expect(
+      usePlayerStore.getState().queueState.queue[
+        usePlayerStore.getState().queueState.index
+      ]?.id,
+    ).toBe('c');
+  });
+
+  it('reports a missing trash playlist without changing the queue', async () => {
+    useSettingsStore.setState({ trashPlaylistIds: {} });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b'], 0),
+      status: 'playing',
+    });
+
+    const outcome = await usePlayerStore
+      .getState()
+      .trashAlbum(album('Album', ['a', 'b']));
+
+    expect(outcome).toEqual({ ok: false, reason: 'no-playlist' });
+    expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual([
+      'a',
+      'b',
+    ]);
   });
 });
