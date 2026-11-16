@@ -59,7 +59,7 @@ export function QueueRow({
     onPlayNext(position);
   }, [onDismissToast, onPlayNext, position]);
 
-  const { gesture, contentStyle, leftOpacity: nextOpacity, rightOpacity: trashOpacity } =
+  const { gesture, contentStyle, leftOpacity: nextOpacity, rightOpacity: trashOpacity, consumeSwipePress } =
     useSwipeRow({
       leftEnabled: !isCurrent,
       rightEnabled: true,
@@ -159,6 +159,7 @@ export function QueueRow({
             haptic={false}
             scaleTo={1}
             onPress={() => {
+              if (consumeSwipePress()) return;
               onDismissToast();
               void jump(position);
             }}

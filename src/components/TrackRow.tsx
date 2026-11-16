@@ -1,12 +1,4 @@
-import {
-  Download,
-  ListPlus,
-  ListStart,
-  MoreHorizontal,
-  Pause,
-  Play,
-  Plus,
-} from '@/ui/icons';
+import { Download, ListPlus, ListStart, MoreHorizontal, Pause, Play } from '@/ui/icons';
 import { useCallback } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
@@ -31,7 +23,7 @@ export interface TrackRowProps {
   index?: number;
   showArtwork?: boolean;
   onPlay: () => void;
-  onAddToPlaylist?: () => void;
+  /** Opens the per-track menu; the row also triggers it on long press. */
   onMore?: () => void;
 }
 
@@ -40,7 +32,6 @@ export function TrackRow({
   index,
   showArtwork = true,
   onPlay,
-  onAddToPlaylist,
   onMore,
 }: TrackRowProps) {
   const theme = useTheme();
@@ -79,7 +70,7 @@ export function TrackRow({
     [swipeLeftAction, triggerAction],
   );
 
-  const { gesture, contentStyle, leftOpacity, rightOpacity } = useSwipeRow({
+  const { gesture, contentStyle, leftOpacity, rightOpacity, consumeSwipePress } = useSwipeRow({
     leftEnabled: swipeRightAction !== 'none',
     rightEnabled: swipeLeftAction !== 'none',
     onLeft: swipeRight,
@@ -151,10 +142,26 @@ export function TrackRow({
             <PressableScale
               accessibilityRole="button"
               accessibilityLabel={`${isPlaying ? 'Pause' : 'Play'} ${track.title} by ${track.artist ?? 'unknown artist'}`}
+              accessibilityActions={
+                onMore ? [{ name: 'more', label: 'More options' }] : undefined
+              }
+              onAccessibilityAction={(event) => {
+                if (event.nativeEvent.actionName === 'more') onMore?.();
+              }}
               onPress={() => {
+                if (consumeSwipePress()) return;
                 if (isCurrent) void toggle();
                 else onPlay();
               }}
+              onLongPress={
+                onMore
+                  ? () => {
+                      selectFeedback();
+                      onMore();
+                    }
+                  : undefined
+              }
+              delayLongPress={220}
               haptic={false}
               containerStyle={styles.main}
               style={styles.mainInner}
@@ -208,17 +215,12 @@ export function TrackRow({
                 )}
               </View>
             </PressableScale>
-            {onAddToPlaylist ? (
-              <IconButton
-                label={`Add ${track.title} to playlist`}
-                size={34}
-                onPress={onAddToPlaylist}
-              >
-                <Plus size={17} color={theme.colors.textTertiary} />
-              </IconButton>
-            ) : null}
             {onMore ? (
-              <IconButton label={`More options for ${track.title}`} size={34} onPress={onMore}>
+              <IconButton
+                label={`More options for ${track.title}`}
+                size={34}
+                onPress={onMore}
+              >
                 <MoreHorizontal size={18} color={theme.colors.textTertiary} />
               </IconButton>
             ) : null}

@@ -10,6 +10,19 @@ async function login(page: Page) {
   await expect(page.getByRole('button', { name: 'Home' })).toBeVisible();
 }
 
+/** Queue and up-next contents from the persisted player store; no UI dependency. */
+function queueState(page: Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('laila.player');
+    if (!raw) return { queue: [] as string[], upNext: [] as string[] };
+    const state = JSON.parse(raw).state.queueState;
+    return {
+      queue: state.queue.map((track: { title: string }) => track.title) as string[],
+      upNext: state.upNext.map((track: { title: string }) => track.title) as string[],
+    };
+  });
+}
+
 async function setTrashPlaylist(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Trash playlist', exact: true }).click();
@@ -77,6 +90,37 @@ test.describe('Laila web app', () => {
     await page.getByRole('button', { name: 'Clear library search' }).click();
     await expect(page.getByPlaceholder('Search albums, artists, playlists and genres')).toHaveValue('');
     await expect(page.getByRole('button', { name: /A Quiet Place by/ }).first()).toBeVisible();
+  });
+
+  test('swipes and opens the menu on a Library search track @both', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: 'Library' }).click();
+    await page.getByPlaceholder('Search albums, artists, playlists and genres').fill('Blue');
+    const rows = page.getByRole('button', { name: /^Play .* by / });
+    await expect(rows.first()).toBeVisible();
+    await expect.poll(() => rows.count()).toBeGreaterThan(1);
+
+    // Swipe right (Add to next) on the first song row.
+    const first = await rows.first().boundingBox();
+    expect(first).not.toBeNull();
+    const firstY = first!.y + first!.height / 2;
+    await page.mouse.move(first!.x + first!.width * 0.2, firstY);
+    await page.mouse.down();
+    await page.mouse.move(first!.x + first!.width * 0.85, firstY, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(async () => (await queueState(page)).upNext.length).toBeGreaterThan(0);
+    await expect.poll(async () => (await queueState(page)).queue.length).toBe(0);
+
+    // Long press another row for the per-track menu.
+    const second = await rows.nth(1).boundingBox();
+    expect(second).not.toBeNull();
+    await page.mouse.move(second!.x + second!.width / 2, second!.y + second!.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+    await expect(page.getByRole('button', { name: 'Add to queue' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add to queue' }).click();
+    await expect.poll(async () => (await queueState(page)).queue.length).toBe(1);
   });
 
   test('supports keyboard search, space and escape', async ({ page }) => {
@@ -490,7 +534,10 @@ test.describe('Laila web app', () => {
       page.getByTestId('player-sheet').getByRole('slider', { name: 'Playback position' }),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Lyrics', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'More options' }).click();
+    await page
+      .getByTestId('player-sheet')
+      .getByRole('button', { name: 'More options', exact: true })
+      .click();
     await expect(page.getByRole('button', { name: 'Add to next' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add to queue' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add to playlist' })).toBeVisible();
@@ -656,7 +703,8 @@ test.describe('Laila web app', () => {
   test('marks playlists that already contain the track', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
-    await page.getByRole('button', { name: 'Add First Light to playlist' }).click();
+    await page.getByRole('button', { name: 'More options for First Light' }).click();
+    await page.getByRole('button', { name: 'Add to playlist' }).click();
     await expect(page.getByText('Excluded from shuffle').first()).toBeVisible();
     const evening = page.getByRole('checkbox', { name: 'Evening' });
     await expect(evening).toBeChecked();
@@ -675,13 +723,68 @@ test.describe('Laila web app', () => {
   test('adds an album track to a playlist', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /Blue Hour by/ }).first().click();
-    await page.getByRole('button', { name: 'Add First Light to playlist' }).click();
-    await expect(page.getByText('Add to playlist', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'More options for First Light' }).click();
+    await page.getByRole('button', { name: 'Add to playlist' }).click();
+    await expect(page.getByRole('checkbox', { name: 'Evening' })).toBeVisible();
     await page.getByRole('checkbox', { name: 'Evening' }).click();
     const update = page.waitForRequest((request) => request.url().includes('updatePlaylist'));
     await page.getByRole('button', { name: 'Apply', exact: true }).click();
     await update;
-    await expect(page.getByText('Add to playlist', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('checkbox', { name: 'Evening' })).toHaveCount(0);
+  });
+
+  test('swipes an album track to play next and to the queue @both', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: /Blue Hour by/ }).first().click();
+    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
+
+    const swipe = async (title: string, direction: 'left' | 'right') => {
+      const row = page.getByRole('button', { name: `Play ${title}` });
+      await expect(row).toBeVisible();
+      const box = await row.boundingBox();
+      expect(box).not.toBeNull();
+      const y = box!.y + box!.height / 2;
+      const fromX = direction === 'right' ? box!.x + box!.width * 0.2 : box!.x + box!.width * 0.8;
+      const toX = direction === 'right' ? box!.x + box!.width * 0.85 : box!.x + box!.width * 0.15;
+      await page.mouse.move(fromX, y);
+      await page.mouse.down();
+      await page.mouse.move(toX, y, { steps: 10 });
+      await page.mouse.up();
+    };
+
+    // Defaults: swipe right adds to next, swipe left adds to the queue. With
+    // nothing playing, "add to next" lands in Up next and the queue stays empty.
+    await swipe('Slow Motion', 'right');
+    await expect.poll(async () => (await queueState(page)).upNext).toEqual(['Slow Motion']);
+    await expect.poll(async () => (await queueState(page)).queue.length).toBe(0);
+
+    await swipe('Night Drive', 'left');
+    // Exactly one track: a drag that also registered as a tap would replace the
+    // queue with the whole album.
+    await expect.poll(async () => (await queueState(page)).queue).toEqual(['Night Drive']);
+  });
+
+  test('long-presses an album track to open its menu @both', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: /Blue Hour by/ }).first().click();
+    const row = page.getByRole('button', { name: 'Play Paper Planes' });
+    await expect(row).toBeVisible();
+    const box = await row.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+
+    await expect(page.getByRole('button', { name: 'Add to next' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add to queue' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add to playlist' })).toBeVisible();
+    // A long press opens the menu only; it must not start playback.
+    await expect(page.getByRole('button', { name: /Now playing:/ })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Add to queue' }).click();
+    await expect.poll(async () => (await queueState(page)).queue).toEqual(['Paper Planes']);
+    await expect(page.getByRole('button', { name: 'Add to queue' })).toHaveCount(0);
   });
 
   test('filters the tracks inside a playlist', async ({ page }) => {
@@ -838,7 +941,10 @@ test.describe('Laila web app', () => {
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
     await page.getByRole('button', { name: /Now playing: First Light/ }).click();
-    await page.getByRole('button', { name: 'More options' }).click();
+    await page
+      .getByTestId('player-sheet')
+      .getByRole('button', { name: 'More options', exact: true })
+      .click();
     await page.getByRole('button', { name: 'Move to Trash' }).click();
 
     await expect(page.getByText(/Moved “First Light” to Trash/)).toBeVisible();
@@ -859,6 +965,28 @@ test.describe('Laila web app', () => {
     await page.keyboard.press('Delete');
     await expect(page.getByText(/Moved “First Light” to Trash/)).toBeVisible();
     await expect(page.getByText('Slow Motion').first()).toBeVisible();
+  });
+
+  test('moves a library row to Trash from its menu and undoes it', async ({ page }) => {
+    await login(page);
+    await setTrashPlaylist(page);
+    await page.goto('/album/al-1');
+    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'More options for Slow Motion' }).click();
+    await page.getByRole('button', { name: 'Move to Trash' }).click();
+    await expect(page.getByText(/Moved “Slow Motion” to Trash/)).toBeVisible();
+
+    // Nothing is playing, so the row menu must not touch the queue.
+    const queued = await page.evaluate(() => {
+      const raw = window.localStorage.getItem('laila.player');
+      return raw ? JSON.parse(raw).state.queueState.queue.length : 0;
+    });
+    expect(queued).toBe(0);
+
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByText(/Restored to queue/)).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
   });
 
   test('swipes a queue row left to Trash and undoes it @both', async ({ page }) => {

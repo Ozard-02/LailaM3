@@ -250,8 +250,8 @@ export default function AlbumScreen() {
       <VirtualTrackList
         tracks={songs}
         header={header}
+        parentAlbumId={data.id}
         onPlay={(index) => void playTracks(songs, index)}
-        onAddToPlaylist={offline ? undefined : (track) => setPlaylistTracks([track])}
       />
       <ActionSheet
         visible={moreOpen}

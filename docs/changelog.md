@@ -3,6 +3,26 @@
 Dated implementation history. Current status and priorities live in
 `ROADMAP.md`; test commands and matrices live in `docs/testing.md`.
 
+## 2026-11-16
+
+- Track rows in albums, playlists, favourites, Library search and Search open a
+  per-track menu on **long press** or from a trailing ••• button: Add to next,
+  Add to queue, Add to playlist, Download, Open album (hidden inside that
+  album), Open artist and **Move to Trash**. The old per-row “+” shortcut is
+  gone; adding to a playlist goes through the same menu, so one control serves
+  touch, mouse, keyboard and screen readers (`accessibilityActions: more`).
+- Trash is now the same everywhere: `trashLibraryTrack(track)` shares the queue
+  path (`trashOne`) instead of being queue-position only, and one
+  `useTrashFeedback` helper gives queue rows and library rows the same failure
+  toasts and the same Undo.
+- Horizontal swipes already applied the configured actions, but on the web a
+  drag also landed as a click on the row, which replayed the whole album and
+  wiped the queued track. `useSwipeRow` now reports when a press is the tail of
+  a swipe (`consumeSwipePress`) and track and queue rows ignore that press.
+- Tests: three store tests for `trashLibraryTrack` and E2E for album-row swipe,
+  the long-press menu, the Library-search row (swipe + menu) and trashing a row
+  from its menu.
+
 ## 2026-11-12
 
 - Large-library/offline performance pass: offline index mutations are batched,

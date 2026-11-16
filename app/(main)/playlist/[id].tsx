@@ -2,7 +2,6 @@ import { useLocalSearchParams } from 'expo-router';
 import { ListPlus, Pin, Play, Search as SearchIcon, Shuffle, X } from '@/ui/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
-import { AddToPlaylistSheet } from '@/components/AddToPlaylistSheet';
 import { isPlaylistExclusive, withExclusiveComment } from '@/core/exclusions';
 import { filterSearch } from '@/core/search/text';
 import { useSearchIndex } from '@/hooks/useSearchIndex';
@@ -66,7 +65,6 @@ export default function PlaylistScreen() {
     [offline, offlineIndex, id],
   );
   const [filter, setFilter] = useState('');
-  const [playlistTracks, setPlaylistTracks] = useState<Track[] | null>(null);
   const [exclusiveBusy, setExclusiveBusy] = useState(false);
   const [exclusiveError, setExclusiveError] = useState<string | null>(null);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
@@ -297,11 +295,7 @@ export default function PlaylistScreen() {
         const track = visibleSongs[index];
         if (track) void playTracks(songs, songs.findIndex((item) => item.id === track.id));
       }}
-      onAddToPlaylist={offline ? undefined : (track) => setPlaylistTracks([track])}
     />
-    {playlistTracks ? (
-      <AddToPlaylistSheet tracks={playlistTracks} onClose={() => setPlaylistTracks(null)} />
-    ) : null}
     </>
   );
 }

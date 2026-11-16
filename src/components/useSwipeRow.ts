@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
 import {
   interpolate,
@@ -8,6 +8,9 @@ import {
   withSpring,
 } from 'react-native-reanimated';
 import { motion } from '@/theme/tokens';
+
+/** A press this soon after a horizontal drag belongs to the drag, not the row. */
+const PRESS_AFTER_SWIPE_MS = 400;
 
 /** Shared horizontal swipe used by track rows and queue rows. */
 export function useSwipeRow({
@@ -34,6 +37,11 @@ export function useSwipeRow({
   scale?: number;
 }) {
   const translateX = useSharedValue(0);
+  const [lastSwipeAt, setLastSwipeAt] = useState(0);
+
+  // Runs in JS: the browser still delivers a click on pointer-up after a drag,
+  // so the row's press handler asks `consumeSwipePress` before acting on it.
+  const markSwiped = useCallback(() => setLastSwipeAt(Date.now()), []);
 
   const gesture = useMemo(
     () =>
@@ -42,6 +50,9 @@ export function useSwipeRow({
         .failOffsetY([-12, 12])
         .onBegin(() => {
           if (onBegin) runOnJS(onBegin)();
+        })
+        .onStart(() => {
+          runOnJS(markSwiped)();
         })
         .onUpdate((event) => {
           let next = event.translationX;
@@ -60,7 +71,23 @@ export function useSwipeRow({
           // Spring back carrying the finger's velocity instead of a fixed timing.
           translateX.set(withSpring(0, { ...motion.releaseSpring, velocity: event.velocityX }));
         }),
-    [leftEnabled, maxTranslate, onBegin, onLeft, onRight, rightEnabled, threshold, translateX],
+    [
+      leftEnabled,
+      markSwiped,
+      maxTranslate,
+      onBegin,
+      onLeft,
+      onRight,
+      rightEnabled,
+      threshold,
+      translateX,
+    ],
+  );
+
+  /** True when the press that just landed is the tail of a horizontal swipe. */
+  const consumeSwipePress = useCallback(
+    () => Date.now() - lastSwipeAt < PRESS_AFTER_SWIPE_MS,
+    [lastSwipeAt],
   );
 
   const contentStyle = useAnimatedStyle(() => ({
@@ -75,5 +102,5 @@ export function useSwipeRow({
     opacity: interpolate(translateX.value, [-revealDistance, 0], [1, 0], 'clamp'),
   }));
 
-  return { gesture, translateX, contentStyle, leftOpacity, rightOpacity };
+  return { gesture, translateX, contentStyle, leftOpacity, rightOpacity, consumeSwipePress };
 }

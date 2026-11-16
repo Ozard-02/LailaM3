@@ -20,6 +20,7 @@ import { FavouriteCard } from '@/components/FavouriteCard';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { PlaylistCard } from '@/components/PlaylistCard';
 import { Screen } from '@/components/Screen';
+import { TrackMoreSheet } from '@/components/TrackMoreSheet';
 import { TrackRow } from '@/components/TrackRow';
 import { useAlbumPages, useArtists, useGenres, usePlaylists, useSearch } from '@/hooks/useLibrary';
 import { useBottomChromeInset } from '@/hooks/useBottomChromeInset';
@@ -75,6 +76,7 @@ export default function LibraryScreen() {
   const [tab, setTab] = useState<Tab>('albums');
   const [search, setSearch] = useState('');
   const [songQuery, setSongQuery] = useState('');
+  const [moreTrack, setMoreTrack] = useState<Track | null>(null);
   const searchRef = useRef<ComponentRef<typeof TextInput>>(null);
   const searchFocusRequest = useUIStore((state) => state.searchFocusRequest);
   const albums = useAlbumPages('alphabeticalByName', 120);
@@ -245,12 +247,13 @@ export default function LibraryScreen() {
   const header = <OfflineNotice />;
 
   return (
-    <Screen
-      title="Library"
-      subtitle={offline ? 'Downloaded music only, no server needed.' : 'Everything on your server, one quiet shelf.'}
-      scroll={false}
-      onBodyLayout={(event) => setBodyWidth(event.nativeEvent.layout.width)}
-    >
+    <>
+      <Screen
+        title="Library"
+        subtitle={offline ? 'Downloaded music only, no server needed.' : 'Everything on your server, one quiet shelf.'}
+        scroll={false}
+        onBodyLayout={(event) => setBodyWidth(event.nativeEvent.layout.width)}
+      >
       {header}
       <Input
         inputRef={searchRef}
@@ -290,6 +293,7 @@ export default function LibraryScreen() {
                     track={item.track}
                     index={item.index}
                     onPlay={() => void playTracks(filteredSongs, item.index)}
+                    onMore={() => setMoreTrack(item.track)}
                   />
                 );
               case 'albumRow':
@@ -592,7 +596,11 @@ export default function LibraryScreen() {
           ) : null}
         </>
       )}
-    </Screen>
+      </Screen>
+      {moreTrack ? (
+        <TrackMoreSheet track={moreTrack} onClose={() => setMoreTrack(null)} />
+      ) : null}
+    </>
   );
 }
 

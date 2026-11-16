@@ -1,20 +1,24 @@
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
+import type { Track } from '@/core/models';
+import type { TrashOutcome } from '@/core/trash';
 import { usePlayerStore } from '@/stores/player';
 import { useUIStore } from '@/stores/ui';
 
-/** Moves a queue row to the configured Trash playlist and offers Undo. */
-export function useTrashAction() {
+/**
+ * Shared Trash feedback: queue rows and library rows use the same failure and
+ * success toasts, so both entry points behave the same way.
+ */
+function useTrashFeedback() {
   const router = useRouter();
-  const trashTrack = usePlayerStore((state) => state.trashTrack);
   const undoTrash = usePlayerStore((state) => state.undoTrash);
   const showToast = useUIStore((state) => state.showToast);
 
   return useCallback(
-    async (index: number) => {
-      let outcome;
+    async (run: () => Promise<TrashOutcome>) => {
+      let outcome: TrashOutcome;
       try {
-        outcome = await trashTrack(index);
+        outcome = await run();
       } catch {
         showToast({ message: 'Could not move the track to Trash.', tone: 'error' });
         return false;
@@ -53,6 +57,28 @@ export function useTrashAction() {
       });
       return true;
     },
-    [router, showToast, trashTrack, undoTrash],
+    [router, showToast, undoTrash],
+  );
+}
+
+/** Moves a queue row to the configured Trash playlist and offers Undo. */
+export function useTrashAction() {
+  const trashTrack = usePlayerStore((state) => state.trashTrack);
+  const feedback = useTrashFeedback();
+
+  return useCallback(
+    (index: number) => feedback(() => trashTrack(index)),
+    [feedback, trashTrack],
+  );
+}
+
+/** Moves a library track (album, playlist, favourites, search) to Trash. */
+export function useTrashTrackAction() {
+  const trashLibraryTrack = usePlayerStore((state) => state.trashLibraryTrack);
+  const feedback = useTrashFeedback();
+
+  return useCallback(
+    (track: Track) => feedback(() => trashLibraryTrack(track)),
+    [feedback, trashLibraryTrack],
   );
 }

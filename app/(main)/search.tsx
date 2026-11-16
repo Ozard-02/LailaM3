@@ -5,9 +5,10 @@ import { AlbumGrid } from '@/components/AlbumGrid';
 import { ArtistRow } from '@/components/ArtistRow';
 import { Screen } from '@/components/Screen';
 import { SectionHeader } from '@/components/SectionHeader';
+import { TrackMoreSheet } from '@/components/TrackMoreSheet';
 import { TrackRow } from '@/components/TrackRow';
 import { useAlbumPages, useArtists, useSearch } from '@/hooks/useLibrary';
-import type { Album, Artist } from '@/core/models';
+import type { Album, Artist, Track } from '@/core/models';
 import { filterSearch } from '@/core/search/text';
 import { useSearchIndex } from '@/hooks/useSearchIndex';
 import { usePlayerStore } from '@/stores/player';
@@ -28,6 +29,7 @@ export default function SearchScreen() {
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
   const [deep, setDeep] = useState(false);
+  const [moreTrack, setMoreTrack] = useState<Track | null>(null);
   const search = useSearch(query);
   const playTracks = usePlayerStore((state) => state.playTracks);
   const deepAlbums = useAlbumPages('alphabeticalByName', 500, { enabled: deep });
@@ -223,6 +225,7 @@ export default function SearchScreen() {
                 track={track}
                 index={index}
                 onPlay={() => void playTracks(result.songs, index)}
+                onMore={() => setMoreTrack(track)}
               />
             ))}
           </View>
@@ -256,6 +259,10 @@ export default function SearchScreen() {
           {totalResults} results
           {hasDeepResults ? ' · local pinyin scan' : ''}
         </Text>
+      ) : null}
+
+      {moreTrack ? (
+        <TrackMoreSheet track={moreTrack} onClose={() => setMoreTrack(null)} />
       ) : null}
     </Screen>
   );

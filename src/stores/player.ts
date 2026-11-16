@@ -86,6 +86,8 @@ export interface PlayerState {
   moveToUpNext: (index: number) => void;
   removeAt: (index: number) => void;
   trashTrack: (index: number) => Promise<TrashOutcome>;
+  /** Trash a track from a library list, where there is no queue position. */
+  trashLibraryTrack: (track: Track) => Promise<TrashOutcome>;
   undoTrash: (undo: TrashUndo) => Promise<TrashUndoResult>;
   move: (from: number, to: number) => void;
   reorder: (tracks: Track[]) => void;
@@ -392,6 +394,111 @@ export const usePlayerStore = create<PlayerState>()(
           await loadCurrent();
         }
       };
+
+      /**
+       * Removes one track from the library: adds it to the Trash playlist,
+       * deletes the local copy and the favourite, and drops it from the queue.
+       * Queue rows call it with their position; library rows with the track.
+       */
+      const trashOne = async (track: Track, skipCurrent: boolean): Promise<TrashOutcome> => {
+        const state = get().queueState;
+
+        const server = useAuthStore.getState().server;
+        if (!server) return { ok: false, reason: 'failed', message: 'Not signed in.' };
+        if (isOfflineNow()) return { ok: false, reason: 'offline' };
+
+        const playlistId =
+          useSettingsStore.getState().trashPlaylistIds[serverKey(server)];
+        if (!playlistId) return { ok: false, reason: 'no-playlist' };
+
+        let addedToPlaylist = false;
+        try {
+          const playlist = await getPlaylist(server, playlistId);
+          if (!(playlist.songs ?? []).some((item) => item.id === track.id)) {
+            await updatePlaylist(server, playlistId, { songIdToAdd: track.id });
+            addedToPlaylist = true;
+          }
+        } catch (error) {
+          logger.warn('Could not add track to the trash playlist', { error });
+          return {
+            ok: false,
+            reason: 'failed',
+            message: 'Could not update the trash playlist.',
+          };
+        }
+
+        const undo = createTrashUndo(
+          state,
+          track,
+          server,
+          playlistId,
+          addedToPlaylist,
+        );
+        let warning: string | undefined;
+
+        if (skipCurrent) {
+          try {
+            await get().next();
+          } catch (error) {
+            logger.warn('Could not skip the trashed track', { error });
+          }
+        }
+
+        // The native queue is only an OS-facing mirror. Remove the trashed
+        // entries in place: reloading the whole queue here restarted the
+        // current track and paused the one `next()` had just started.
+        // Positions are read after the skip so an Up next insertion is
+        // already reflected; highest first keeps the other indexes valid.
+        const enginePositions = get().queueState.queue.reduce<number[]>(
+          (positions, item, position) => {
+            if (item.id === track.id) positions.push(position);
+            return positions;
+          },
+          [],
+        );
+        set((current) => ({
+          queueState: removeTrackEverywhere(current.queueState, track.id),
+        }));
+        if (audioEngine.removeQueueItem) {
+          for (const position of enginePositions.reverse()) {
+            try {
+              await audioEngine.removeQueueItem(position, track.id);
+            } catch (error) {
+              logger.warn('Could not remove the trashed track from the native queue', {
+                error,
+              });
+            }
+          }
+        }
+        if (get().queueState.queue.length === 0) {
+          set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
+        }
+
+        // Delete the local copy only after playback has moved off it.
+        if (track.starred) {
+          try {
+            await star(server, track.id, { remove: true });
+            await useOfflineStore
+              .getState()
+              .removeCollectionTrack(FAVOURITES_COLLECTION.id, track.id);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.starred(server) });
+          } catch (error) {
+            logger.warn('Could not remove the track from favourites', { error });
+            warning = 'The favourite could not be removed.';
+          }
+        }
+
+        try {
+          const offline = useOfflineStore.getState();
+          if (offline.isDownloaded(track.id)) await offline.removeTrack(track.id);
+        } catch (error) {
+          logger.warn('Could not delete the downloaded track', { error });
+          warning = warning ?? 'The download could not be deleted.';
+        }
+
+        invalidatePlaylistQueries();
+        return { ok: true, undo, warning };
+    };
 
       return {
         queueState: emptyQueue,
@@ -720,106 +827,17 @@ export const usePlayerStore = create<PlayerState>()(
           set({ queueState: queueReducer(get().queueState, { type: 'remove', index }) });
         },
 
+        // Library rows have no queue position; both paths share `trashOne`.
         trashTrack: async (index) => {
           const state = get().queueState;
           const track = state.queue[index];
           if (!track) return { ok: false, reason: 'not-found' };
+          return trashOne(track, state.index === index);
+        },
 
-          const server = useAuthStore.getState().server;
-          if (!server) return { ok: false, reason: 'failed', message: 'Not signed in.' };
-          if (isOfflineNow()) return { ok: false, reason: 'offline' };
-
-          const playlistId =
-            useSettingsStore.getState().trashPlaylistIds[serverKey(server)];
-          if (!playlistId) return { ok: false, reason: 'no-playlist' };
-
-          let addedToPlaylist = false;
-          try {
-            const playlist = await getPlaylist(server, playlistId);
-            if (!(playlist.songs ?? []).some((item) => item.id === track.id)) {
-              await updatePlaylist(server, playlistId, { songIdToAdd: track.id });
-              addedToPlaylist = true;
-            }
-          } catch (error) {
-            logger.warn('Could not add track to the trash playlist', { error });
-            return {
-              ok: false,
-              reason: 'failed',
-              message: 'Could not update the trash playlist.',
-            };
-          }
-
-          const undo = createTrashUndo(
-            state,
-            track,
-            server,
-            playlistId,
-            addedToPlaylist,
-          );
-          let warning: string | undefined;
-
-          if (state.index === index) {
-            try {
-              await get().next();
-            } catch (error) {
-              logger.warn('Could not skip the trashed track', { error });
-            }
-          }
-
-          // The native queue is only an OS-facing mirror. Remove the trashed
-          // entries in place: reloading the whole queue here restarted the
-          // current track and paused the one `next()` had just started.
-          // Positions are read after the skip so an Up next insertion is
-          // already reflected; highest first keeps the other indexes valid.
-          const enginePositions = get().queueState.queue.reduce<number[]>(
-            (positions, item, position) => {
-              if (item.id === track.id) positions.push(position);
-              return positions;
-            },
-            [],
-          );
-          set((current) => ({
-            queueState: removeTrackEverywhere(current.queueState, track.id),
-          }));
-          if (audioEngine.removeQueueItem) {
-            for (const position of enginePositions.reverse()) {
-              try {
-                await audioEngine.removeQueueItem(position, track.id);
-              } catch (error) {
-                logger.warn('Could not remove the trashed track from the native queue', {
-                  error,
-                });
-              }
-            }
-          }
-          if (get().queueState.queue.length === 0) {
-            set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
-          }
-
-          // Delete the local copy only after playback has moved off it.
-          if (track.starred) {
-            try {
-              await star(server, track.id, { remove: true });
-              await useOfflineStore
-                .getState()
-                .removeCollectionTrack(FAVOURITES_COLLECTION.id, track.id);
-              await queryClient.invalidateQueries({ queryKey: queryKeys.starred(server) });
-            } catch (error) {
-              logger.warn('Could not remove the track from favourites', { error });
-              warning = 'The favourite could not be removed.';
-            }
-          }
-
-          try {
-            const offline = useOfflineStore.getState();
-            if (offline.isDownloaded(track.id)) await offline.removeTrack(track.id);
-          } catch (error) {
-            logger.warn('Could not delete the downloaded track', { error });
-            warning = warning ?? 'The download could not be deleted.';
-          }
-
-          invalidatePlaylistQueries();
-          return { ok: true, undo, warning };
+        trashLibraryTrack: async (track) => {
+          const state = get().queueState;
+          return trashOne(track, selectCurrentTrack(state)?.id === track.id);
         },
 
         undoTrash: async (undo) => {

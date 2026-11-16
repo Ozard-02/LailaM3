@@ -180,3 +180,67 @@ describe('trashTrack playback continuity', () => {
     expect(queue.index).toBe(0);
   });
 });
+
+describe('trashLibraryTrack', () => {
+  it('trashes a track that is not in the queue without touching playback', async () => {
+    mocks.getPlaylist
+      .mockResolvedValueOnce({ songs: [] })
+      .mockResolvedValueOnce({ songs: [{ id: 'z' }] });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b'], 0),
+      status: 'playing',
+      position: 21,
+    });
+
+    const outcome = await usePlayerStore.getState().trashLibraryTrack(track('z'));
+
+    expect(outcome.ok).toBe(true);
+    expect(mocks.updatePlaylist).toHaveBeenCalledWith(server, 'trash', {
+      songIdToAdd: 'z',
+    });
+    // The queue and the playing track are untouched, and nothing reloads.
+    expect(mocks.load).not.toHaveBeenCalled();
+    expect(mocks.setQueue).not.toHaveBeenCalled();
+    expect(mocks.removeQueueItem).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(usePlayerStore.getState().status).toBe('playing');
+    expect(usePlayerStore.getState().position).toBe(21);
+
+    // Undo removes the playlist entry again.
+    if (!outcome.ok) return;
+    await usePlayerStore.getState().undoTrash(outcome.undo);
+    expect(mocks.updatePlaylist).toHaveBeenLastCalledWith(server, 'trash', {
+      songIndexToRemove: 0,
+    });
+  });
+
+  it('skips ahead when the library row is the track that is playing', async () => {
+    mocks.getPlaylist.mockResolvedValueOnce({ songs: [] });
+    usePlayerStore.setState({
+      queueState: queueState(['a', 'b'], 0),
+      status: 'playing',
+      position: 12,
+    });
+
+    const outcome = await usePlayerStore.getState().trashLibraryTrack(track('a'));
+
+    expect(outcome.ok).toBe(true);
+    expect(mocks.setQueue).toHaveBeenCalledTimes(1);
+    expect(mocks.setQueue).toHaveBeenCalledWith(expect.any(Array), 1);
+    expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual(['b']);
+  });
+
+  it('reports a missing trash playlist without changing the queue', async () => {
+    useSettingsStore.setState({ trashPlaylistIds: {} });
+    usePlayerStore.setState({ queueState: queueState(['a'], 0), status: 'playing' });
+
+    const outcome = await usePlayerStore.getState().trashLibraryTrack(track('a'));
+
+    expect(outcome).toEqual({ ok: false, reason: 'no-playlist' });
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().queueState.queue.map((item) => item.id)).toEqual(['a']);
+  });
+});

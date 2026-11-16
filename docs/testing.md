@@ -16,15 +16,18 @@ npm run build:web     # production web export
 npm run profile:core  # large-input core benchmark (not part of `npm test`)
 ```
 
-## Current baseline — 2026-11-12
+## Current baseline — 2026-11-16
 
-- **154 unit tests** in 27 files.
-- **66 default E2E checks** across Chromium desktop, the mobile viewport and one
+- **157 unit tests** in 27 files.
+- **73 default E2E checks**: 55 Chromium desktop, 17 mobile checks and one
   Firefox seek check.
 - `FULL_E2E=1` was not re-measured after the queue/player pass.
 - Typecheck and lint are clean; the web export builds.
 - Android release builds; the Media3 device matrix is pending. The new native
   queue removal has not been smoke-tested on hardware yet.
+- The 2026-11-16 build adds the per-track ••• menu (long press or button) on
+  album, playlist, favourites and both search lists, Move to Trash in that
+  menu, and the swipe/press guard; desktop and mobile E2E pass.
 
 ## Unit coverage
 
