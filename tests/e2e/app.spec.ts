@@ -410,6 +410,13 @@ test.describe('Laila web app', () => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
+    // The mock stream is only eight seconds long. Pause from the mini player
+    // immediately so the track cannot end during the player morph or the three
+    // seek gestures, which would reset the slider.
+    const miniPause = page.getByRole('button', { name: 'Pause', exact: true }).first();
+    await expect(miniPause).toBeVisible();
+    await miniPause.click();
     await page.getByRole('button', { name: /Now playing: First Light/ }).click();
     await page.waitForTimeout(900);
     const slider = page
@@ -417,10 +424,10 @@ test.describe('Laila web app', () => {
       .getByRole('slider', { name: 'Playback position' });
     const box = await slider.boundingBox();
     expect(box).not.toBeNull();
-    await page.mouse.click(box!.x + box!.width * 0.7, box!.y + box!.height / 2);
+    await page.mouse.click(box!.x + box!.width * 0.2, box!.y + box!.height / 2);
     await expect
       .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
-      .toBeGreaterThan(5);
+      .toBeGreaterThan(1);
     const before = Number(await slider.getAttribute('aria-valuenow'));
     await slider.focus();
     await page.keyboard.press('ArrowRight');
@@ -429,6 +436,11 @@ test.describe('Laila web app', () => {
       .toBeGreaterThan(before);
 
     await page.mouse.click(box!.x + box!.width * 0.1, box!.y + box!.height / 2);
+    // The range input updates the store on the next render. Read the value only
+    // after the 10% jump has landed, otherwise beforeDrag is the previous 8 s.
+    await expect
+      .poll(async () => Number(await slider.getAttribute('aria-valuenow')))
+      .toBeLessThan(2);
     const beforeDrag = Number(await slider.getAttribute('aria-valuenow'));
     await page.mouse.move(box!.x + box!.width * 0.2, box!.y + box!.height / 2);
     await page.mouse.down();
@@ -902,7 +914,7 @@ test.describe('Laila web app', () => {
       const overlay = document.querySelector('[data-testid="player-morph-overlay"]');
       const start = performance.now();
       const tick = () => {
-        // The queue panel mounts on first intent, so it may not exist yet.
+        // The queue panel is pre-mounted off-screen after the player settles.
         const sheet = document.querySelector('[data-testid="queue-sheet"]');
         if (overlay && sheet) {
           // The cover is the largest overlay child (web adds 0-size wrappers).
@@ -934,6 +946,55 @@ test.describe('Laila web app', () => {
     await expect(page.getByText('4 tracks · drag to reorder')).toBeVisible();
     await page.getByRole('button', { name: /Remove Slow Motion/ }).click();
     await expect(page.getByText('3 tracks · drag to reorder')).toBeVisible();
+  });
+
+  test('removes the clicked queue rows after a previous removal', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await page.getByRole('button', { name: /Open queue/ }).first().click();
+    await expect(page.getByText('4 tracks · drag to reorder')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Remove Slow Motion' }).click();
+    await expect(page.getByText('3 tracks · drag to reorder')).toBeVisible();
+    await page.getByRole('button', { name: 'Remove Paper Planes' }).click();
+    await expect(page.getByText('2 tracks · drag to reorder')).toBeVisible();
+
+    await expect(page.getByRole('button', { name: 'Play Paper Planes' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Play Night Drive' })).toBeVisible();
+  });
+
+  test('swipes two queue rows to play next after the first one moves', async ({ page }) => {
+    await login(page);
+    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await page.getByRole('button', { name: /Open queue/ }).first().click();
+    await expect(page.getByText('4 tracks · drag to reorder')).toBeVisible();
+
+    const swipeRight = async (title: string) => {
+      const row = page.getByRole('button', { name: `Play ${title}` });
+      await expect(row).toBeVisible();
+      const box = await row.boundingBox();
+      expect(box).not.toBeNull();
+      const y = box!.y + box!.height / 2;
+      await page.mouse.move(box!.x + box!.width * 0.2, y);
+      await page.mouse.down();
+      await page.mouse.move(box!.x + box!.width * 0.85, y, { steps: 10 });
+      await page.mouse.up();
+    };
+
+    await swipeRight('Slow Motion');
+    await expect.poll(async () => (await queueState(page)).upNext).toEqual(['Slow Motion']);
+    await expect(page.getByText('3 tracks · drag to reorder')).toBeVisible();
+
+    await swipeRight('Paper Planes');
+    await expect
+      .poll(async () => (await queueState(page)).upNext)
+      .toEqual(['Slow Motion', 'Paper Planes']);
+    await expect.poll(async () => (await queueState(page)).queue).toEqual([
+      'First Light',
+      'Night Drive',
+    ]);
   });
 
   test('moves the current track to Trash and undoes it @both', async ({ page }) => {

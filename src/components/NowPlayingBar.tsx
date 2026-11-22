@@ -10,7 +10,7 @@ import {
   SkipBack,
   SkipForward,
 } from '@/ui/icons';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -22,6 +22,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { CompactPlaybackProgress, PlaybackProgress } from '@/components/PlaybackProgress';
 import { MarqueeText } from '@/components/MarqueeText';
+import { currentTrack as selectCurrentTrack, queueReducer } from '@/core/queue/reducer';
 import { useCurrentTrack, usePlayerStore } from '@/stores/player';
 import { useSettingsStore } from '@/stores/settings';
 import { useUIStore } from '@/stores/ui';
@@ -43,6 +44,8 @@ export interface NowPlayingBarProps {
   playerProgress?: SharedValue<number>;
   playerHeight?: number;
   playerStartY?: number;
+  /** Stop the title loop while the full player is covering the pill. */
+  paused?: boolean;
 }
 
 export function NowPlayingBar({
@@ -55,8 +58,10 @@ export function NowPlayingBar({
   playerProgress,
   playerHeight,
   playerStartY,
+  paused = false,
 }: NowPlayingBarProps) {
   const theme = useTheme();
+  const reduceMotion = theme.reduceMotion;
   const router = useRouter();
   const chromeRadius = useSettingsStore((state) => state.chromeRadius);
   const track = useCurrentTrack();
@@ -75,6 +80,7 @@ export function NowPlayingBar({
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const playerDragStarted = useSharedValue(false);
+  const [pressSuppressed, setPressSuppressed] = useState(false);
   const openPlayer = useCallback(() => {
     if (onOpenPlayer) {
       onOpenPlayer();
@@ -82,6 +88,43 @@ export function NowPlayingBar({
     }
     router.push('/player');
   }, [onOpenPlayer, router]);
+
+  // A pan also fires the Pressable's click on web. Keep the tap handler from
+  // opening the player (or restarting the drag spring) after a real swipe.
+  const markDragged = useCallback(() => setPressSuppressed(true), []);
+
+  const openFromPress = useCallback(() => {
+    if (pressSuppressed) {
+      setPressSuppressed(false);
+      return;
+    }
+    openPlayer();
+  }, [openPlayer, pressSuppressed]);
+
+  // Match the cover swipe boundary: do not end playback or restart the first
+  // track when there is no target, and advance through duplicate ids by index.
+  const swipeTrack = useCallback(
+    (dir: -1 | 1) => {
+      const state = usePlayerStore.getState().queueState;
+      const nextState = queueReducer(state, {
+        type: dir < 0 ? 'next' : 'previous',
+      });
+      const target = selectCurrentTrack(nextState);
+      const changed =
+        nextState.index !== state.index ||
+        nextState.queue !== state.queue ||
+        nextState.upNext !== state.upNext;
+      if (!target || !changed) return;
+      void (dir < 0 ? next() : previous());
+    },
+    [next, previous],
+  );
+
+  useEffect(() => {
+    if (!pressSuppressed) return undefined;
+    const timer = setTimeout(() => setPressSuppressed(false), 400);
+    return () => clearTimeout(timer);
+  }, [pressSuppressed]);
 
   const hideAndPause = useCallback(() => {
     setHidden(true);
@@ -97,13 +140,17 @@ export function NowPlayingBar({
           translateX.set(Math.max(-120, Math.min(120, event.translationX)));
         })
         .onEnd((event) => {
+          runOnJS(markDragged)();
           if (Math.abs(translateX.get()) > 58 || Math.abs(event.velocityX) > 650) {
-            if (translateX.get() < 0) runOnJS(next)();
-            else runOnJS(previous)();
+            runOnJS(swipeTrack)(translateX.get() < 0 ? -1 : 1);
           }
-          translateX.set(withSpring(0, { ...motion.releaseSpring, velocity: event.velocityX }));
+          translateX.set(
+            reduceMotion
+              ? 0
+              : withSpring(0, { ...motion.releaseSpring, velocity: event.velocityX }),
+          );
         }),
-    [next, previous, translateX],
+    [markDragged, reduceMotion, swipeTrack, translateX],
   );
 
   const verticalSwipe = useMemo(
@@ -138,16 +185,21 @@ export function NowPlayingBar({
           }
         })
         .onEnd((event) => {
+          runOnJS(markDragged)();
           if (playerProgress && playerHeight) {
             const shouldOpen = playerProgress.get() > 0.25 || event.velocityY < -600;
             if (onPlayerSettle && playerDragStarted.get()) {
               // Start the spring here, on the UI thread, carrying the finger's
               // velocity, so release is continuous with the drag.
               playerProgress.set(
-                withSpring(shouldOpen ? 1 : 0, {
-                  ...motion.playerSpring,
-                  velocity: -event.velocityY / Math.max(1, playerStartY ?? playerHeight),
-                }),
+                reduceMotion
+                  ? shouldOpen
+                    ? 1
+                    : 0
+                  : withSpring(shouldOpen ? 1 : 0, {
+                      ...motion.playerSpring,
+                      velocity: -event.velocityY / Math.max(1, playerStartY ?? playerHeight),
+                    }),
               );
               runOnJS(onPlayerSettle)(shouldOpen);
             } else if (shouldOpen) {
@@ -155,7 +207,9 @@ export function NowPlayingBar({
             } else if (playerDragStarted.get() && onClosePlayer) {
               runOnJS(onClosePlayer)();
             }
-            if (!shouldOpen) {
+            // Only a downward gesture hides the pill. A partial upward drag
+            // released with a downward flick used to stop playback.
+            if (!shouldOpen && !playerDragStarted.get()) {
               if (translateY.get() > 42 || event.velocityY > 550) {
                 runOnJS(hideAndPause)();
               }
@@ -165,10 +219,15 @@ export function NowPlayingBar({
           } else if (translateY.get() > 42 || event.velocityY > 550) {
             runOnJS(hideAndPause)();
           }
-          translateY.set(withSpring(0, { ...motion.releaseSpring, velocity: event.velocityY }));
+          translateY.set(
+            reduceMotion
+              ? 0
+              : withSpring(0, { ...motion.releaseSpring, velocity: event.velocityY }),
+          );
         }),
     [
       hideAndPause,
+      markDragged,
       onClosePlayer,
       onPlayerSettle,
       openPlayer,
@@ -176,6 +235,7 @@ export function NowPlayingBar({
       playerHeight,
       playerProgress,
       playerStartY,
+      reduceMotion,
       translateY,
     ],
   );
@@ -227,7 +287,7 @@ export function NowPlayingBar({
               <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel={`Now playing: ${track.title}. Tap for player, swipe left or right for previous or next, swipe down to stop`}
-                onPress={openPlayer}
+                onPress={openFromPress}
                 containerStyle={styles.compactMain}
                 style={styles.compactMainInner}
               >
@@ -235,7 +295,11 @@ export function NowPlayingBar({
                   <Artwork coverArt={track.coverArt} size={artSize} radius={large ? 12 : 10} />
                 </Animated.View>
                 <Animated.View style={[styles.compactText, compactFadeStyle]}>
-                  <MarqueeText variant={large ? 'headline' : 'callout'} style={styles.strong}>
+                  <MarqueeText
+                    variant={large ? 'headline' : 'callout'}
+                    style={styles.strong}
+                    paused={paused}
+                  >
                     {track.title}
                   </MarqueeText>
                   <Text variant="caption" tone="secondary" numberOfLines={1}>
@@ -290,7 +354,7 @@ export function NowPlayingBar({
       >
         <Artwork coverArt={track.coverArt} size={56} radius={10} />
         <View style={styles.nowText}>
-          <MarqueeText variant="headline">
+          <MarqueeText variant="headline" paused={paused}>
             {track.title}
           </MarqueeText>
           <Text variant="caption" tone="secondary" numberOfLines={1}>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Modal,
   Pressable,
@@ -40,6 +40,8 @@ export function BottomSheetModal({
   const [mounted, setMounted] = useState(visible);
   const [sheetHeight, setSheetHeight] = useState(0);
   const progress = useSharedValue(0);
+  const distance = useSharedValue(height);
+  const entered = useRef(false);
   const reduceMotion = theme.reduceMotion;
 
   // Mount synchronously when shown; unmount only after the exit animation.
@@ -50,20 +52,43 @@ export function BottomSheetModal({
     if (visible) {
       // Wait for the measured height so the slide starts exactly off-screen.
       if (!sheetHeight) return;
+      // Content can settle after the first frame (a playlist list arrives).
+      // Restarting the spring would stall the enter and changing the travel
+      // distance would jump the sheet down; both are avoided after entry.
+      if (entered.current) return;
+      entered.current = true;
+      distance.set(sheetHeight);
       progress.set(reduceMotion ? 1 : withSpring(1, theme.motion.sheetSpring));
       return;
     }
+    entered.current = false;
+    // Capture the real height for the exit, so a sheet whose content grew
+    // still slides fully off-screen.
+    if (sheetHeight) distance.set(sheetHeight);
     progress.set(
-      withTiming(0, { duration: reduceMotion ? 0 : 180 }, (finished) => {
-        if (finished) runOnJS(setMounted)(false);
+      withTiming(0, { duration: reduceMotion ? 0 : theme.motion.fade }, (finished) => {
+        if (finished) {
+          runOnJS(setMounted)(false);
+          // A closed sheet may reopen with different content. Drop the old
+          // measurement so the next open waits for a fresh onLayout.
+          runOnJS(setSheetHeight)(0);
+        }
       }),
     );
-  }, [mounted, progress, reduceMotion, sheetHeight, theme.motion.sheetSpring, visible]);
+  }, [
+    mounted,
+    distance,
+    progress,
+    reduceMotion,
+    sheetHeight,
+    theme.motion.fade,
+    theme.motion.sheetSpring,
+    visible,
+  ]);
 
-  const distance = sheetHeight || height;
   const scrimStyle = useAnimatedStyle(() => ({ opacity: progress.get() }));
   const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - progress.get()) * distance }],
+    transform: [{ translateY: (1 - progress.get()) * distance.get() }],
   }));
 
   if (!mounted) return null;

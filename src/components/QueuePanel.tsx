@@ -1,14 +1,15 @@
 import DraggableFlatList, {
+  type DragEndParams,
   type RenderItemParams,
 } from 'react-native-draggable-flatlist';
 import { ListX, X } from '@/ui/icons';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import type { FlatList } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Track } from '@/core/models';
 import { useTrashAction } from '@/hooks/useTrashAction';
-import { useCurrentTrack, usePlayerStore } from '@/stores/player';
+import { usePlayerStore } from '@/stores/player';
 import { useUIStore } from '@/stores/ui';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Artwork } from '@/ui/Artwork';
@@ -20,26 +21,68 @@ import { selectFeedback } from '@/utils/haptics';
 
 /** The up-next list is a preview: the full queue is editable below. */
 const MAX_UP_NEXT_ROWS = 20;
-/** First-paint row pitch until QueueRow reports its measured height. */
-const QUEUE_ROW_HEIGHT = 60;
+/** Gap below each QueueRow, from its swipe container margin. */
+const QUEUE_ROW_GAP = 4;
+/**
+ * A QueueRow is an artwork (44) plus vertical padding (6 + 6). The first row
+ * reports its real height; this is only the fallback until that layout lands,
+ * so a font scale that makes the text taller corrects itself.
+ */
+const DEFAULT_QUEUE_ROW_HEIGHT = 44 + 6 + 6;
+const DEFAULT_QUEUE_ROW_PITCH = DEFAULT_QUEUE_ROW_HEIGHT + QUEUE_ROW_GAP;
 
-export function QueuePanel({
+function queueKey(item: Track) {
+  return item.id;
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' ||
+      target.isContentEditable)
+  );
+}
+
+const UpNextPreview = memo(function UpNextPreview({ tracks }: { tracks: Track[] }) {
+  if (!tracks.length) return null;
+  return (
+    <View style={styles.upNext}>
+      <Text variant="label" tone="accent">
+        Up next
+      </Text>
+      {tracks.slice(0, MAX_UP_NEXT_ROWS).map((track) => (
+        <View key={track.id} style={styles.upNextRow}>
+          <Artwork coverArt={track.coverArt} size={34} radius={6} />
+          <Text variant="caption" numberOfLines={1} style={styles.upNextText}>
+            {track.title}
+          </Text>
+        </View>
+      ))}
+      {tracks.length > MAX_UP_NEXT_ROWS ? (
+        <Text variant="caption" tone="tertiary">
+          +{tracks.length - MAX_UP_NEXT_ROWS} more
+        </Text>
+      ) : null}
+    </View>
+  );
+});
+
+export const QueuePanel = memo(function QueuePanel({
   onClose,
   topPadding,
-  alignToken = 0,
+  open = true,
 }: {
   onClose: () => void;
   topPadding?: number;
-  /** Bumped when the queue is about to open, before the sheet moves. */
-  alignToken?: number;
+  /** Player sheet visibility; the standalone queue screen is always open. */
+  open?: boolean;
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const queue = usePlayerStore((state) => state.queueState.queue);
   const upNext = usePlayerStore((state) => state.queueState.upNext);
-  const index = usePlayerStore((state) => state.queueState.index);
-  const status = usePlayerStore((state) => state.status);
-  const current = useCurrentTrack();
   const reorder = usePlayerStore((state) => state.reorder);
   const clear = usePlayerStore((state) => state.clear);
   const moveToUpNext = usePlayerStore((state) => state.moveToUpNext);
@@ -59,82 +102,119 @@ export function QueuePanel({
   const armedRef = useRef(false);
   const handledRef = useRef(false);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragLockedRef = useRef(false);
 
   // Opening the queue must land on the playing track, not on the first row.
-  // The list mounts only after its container is measured, so the trailing
-  // space is already correct and initialScrollIndex can land on the target on
-  // the first paint. Later opens re-align through alignToken as the sheet
-  // starts moving; the rows are still below the fold at that point.
+  // The panel is pre-mounted off-screen once the player settles, so it can be
+  // aligned while closed: the first open is then only the sheet spring, with
+  // no mount or scroll work on its visible frames.
   const listRef = useRef<FlatList<Track>>(null);
   const listHeightRef = useRef(0);
   const [listHeight, setListHeight] = useState(0);
-  const rowHeightRef = useRef(0);
-  const [rowHeight, setRowHeight] = useState(0);
-  const indexRef = useRef(index);
-  const queueLengthRef = useRef(queue.length);
-  const measuredRef = useRef(false);
+  const [rowPitch, setRowPitch] = useState(DEFAULT_QUEUE_ROW_PITCH);
+  const pitchRef = useRef(DEFAULT_QUEUE_ROW_PITCH);
+  const pitchMeasuredRef = useRef(false);
+  const alignPendingRef = useRef(false);
+  const alignedOnceRef = useRef(false);
+  const alignRetriesRef = useRef(0);
 
-  useEffect(() => {
-    indexRef.current = index;
-  }, [index]);
-  useEffect(() => {
-    queueLengthRef.current = queue.length;
-    // A new list will mount when tracks return; let it snap into place again.
-    if (queue.length === 0) measuredRef.current = false;
-  }, [queue.length]);
+  useEffect(
+    () => () => {
+      if (holdTimer.current) clearTimeout(holdTimer.current);
+      if (releaseTimer.current) clearTimeout(releaseTimer.current);
+      if (scrollRetryTimer.current) clearTimeout(scrollRetryTimer.current);
+    },
+    [],
+  );
 
   const alignToCurrent = useCallback(() => {
-    const pitch = rowHeightRef.current;
-    const length = queueLengthRef.current;
-    if (listHeightRef.current <= 0 || pitch <= 0 || length === 0) return;
-    const target = Math.max(0, Math.min(indexRef.current, length - 1));
-    listRef.current?.scrollToOffset({ offset: target * pitch, animated: false });
+    if (!alignPendingRef.current || listHeightRef.current <= 0) return;
+    const { queue: currentQueue, index } = usePlayerStore.getState().queueState;
+    if (currentQueue.length === 0) {
+      alignPendingRef.current = false;
+      return;
+    }
+    alignPendingRef.current = false;
+    alignedOnceRef.current = true;
+    alignRetriesRef.current = 0;
+    const target = Math.max(0, Math.min(index, currentQueue.length - 1));
+    listRef.current?.scrollToIndex({ index: target, viewPosition: 0, animated: false });
   }, []);
 
-  // One frame is enough: the sheet starts fully below the screen and the list
-  // only becomes visible after it has risen past the header.
-  useEffect(() => {
-    const frame = requestAnimationFrame(alignToCurrent);
-    return () => cancelAnimationFrame(frame);
-  }, [alignToken, alignToCurrent]);
+  const requestAlign = useCallback(() => {
+    alignPendingRef.current = true;
+    alignedOnceRef.current = false;
+    // Two frames let a just-mounted sheet measure its list and apply the
+    // bottom space below before the target offset is calculated.
+    requestAnimationFrame(() => requestAnimationFrame(alignToCurrent));
+  }, [alignToCurrent]);
 
-  // A single initial snap handles the first mount and later row measurements
-  // (enlarged system text). Height changes after that, such as Up next
-  // growing, must not pull the list away from where the user is.
-  useEffect(() => {
-    if (measuredRef.current || listHeight <= 0 || rowHeight <= 0) return;
-    measuredRef.current = true;
-    alignToCurrent();
-  }, [alignToCurrent, listHeight, rowHeight]);
+  // A track change while the panel is closed still re-aligns it, so the next
+  // open never has to scroll. Rows select the playing state themselves; this
+  // subscription only watches the queue index.
+  useEffect(
+    () =>
+      usePlayerStore.subscribe((state, previous) => {
+        if (state.queueState.index !== previous.queueState.index) requestAlign();
+      }),
+    [requestAlign],
+  );
 
-  const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+  // First layout and every pitch correction need a fresh alignment. Both can
+  // happen while the panel is still translated below the screen.
+  useEffect(() => {
+    requestAlign();
+  }, [requestAlign, rowPitch]);
+
+  // Reopening after the user scrolled away must return to the playing track.
+  // When the panel is already aligned this is a no-op scroll, so it does not
+  // add work to the opening frames.
+  useEffect(() => {
+    if (open) requestAlign();
+  }, [open, requestAlign]);
+
+  const handleScrollToIndexFailed = useCallback(
+    (info: { index: number; averageItemLength: number }) => {
+      // Jump near the target first so the row exists, then align it exactly
+      // once it has been rendered.
+      if (alignRetriesRef.current >= 2) return;
+      alignRetriesRef.current += 1;
+      alignedOnceRef.current = false;
+      const offset = (info.averageItemLength || pitchRef.current) * info.index;
+      listRef.current?.scrollToOffset({ offset, animated: false });
+      if (scrollRetryTimer.current) clearTimeout(scrollRetryTimer.current);
+      scrollRetryTimer.current = setTimeout(() => {
+        listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: false });
+      }, 60);
+    },
+    [],
+  );
+
+  // Rows are fixed height, so the list can compute offsets without measuring
+  // every cell. The pitch comes from the first laid-out row, which keeps the
+  // alignment exact with font scaling and any future row padding change.
+  const onRowLayout = useCallback((event: LayoutChangeEvent) => {
+    // Measure once per mount: virtualisation mounts new rows while the user
+    // scrolls, and re-measuring there would re-trigger alignment and snap the
+    // list back to the playing track.
+    if (pitchMeasuredRef.current) return;
     const height = event.nativeEvent.layout.height;
     if (height <= 0) return;
-    listHeightRef.current = height;
-    setListHeight((current) => (Math.abs(current - height) < 0.5 ? current : height));
+    pitchMeasuredRef.current = true;
+    const pitch = height + QUEUE_ROW_GAP;
+    pitchRef.current = pitch;
+    setRowPitch(pitch);
   }, []);
 
-  const handleRowHeight = useCallback((height: number) => {
-    if (height <= 0) return;
-    rowHeightRef.current = height;
-    setRowHeight((current) => (Math.abs(current - height) < 0.5 ? current : height));
-  }, []);
-
-  const pitch = rowHeight || QUEUE_ROW_HEIGHT;
-  // VirtualizedList reads initialScrollIndex only on mount. Freeze it: a later
-  // track change must not make it scroll when the list content changes.
-  const [initialIndex] = useState(() =>
-    queue.length ? Math.max(0, Math.min(index, queue.length - 1)) : 0,
-  );
-  const trailingSpace = Math.max(0, listHeight - pitch);
   const getItemLayout = useCallback(
-    (_data: unknown, itemIndex: number) => ({
-      length: pitch,
-      offset: pitch * itemIndex,
-      index: itemIndex,
+    (_data: ArrayLike<Track> | null | undefined, rowIndex: number) => ({
+      length: rowPitch,
+      offset: rowPitch * rowIndex,
+      index: rowIndex,
     }),
-    [pitch],
+    [rowPitch],
   );
 
   const requestDrag = useCallback((drag: () => void) => {
@@ -145,7 +225,7 @@ export function QueuePanel({
 
   const releaseDragLock = useCallback(() => {
     // Let the list finish its data-change reset before accepting another drag.
-    setTimeout(() => {
+    releaseTimer.current = setTimeout(() => {
       dragLockedRef.current = false;
     }, 60);
   }, []);
@@ -158,49 +238,143 @@ export function QueuePanel({
     armedRef.current = false;
   }, []);
 
-  const moveBy = useCallback(
-    (from: number, delta: number) => {
-      const to = from + delta;
-      if (to < 0 || to >= queue.length) return;
-      const copy = [...queue];
-      const [item] = copy.splice(from, 1);
-      if (!item) return;
-      copy.splice(to, 0, item);
-      reorder(copy);
-    },
-    [queue, reorder],
-  );
+  const moveBy = useCallback((delta: number) => {
+    const state = usePlayerStore.getState();
+    const from = state.queueState.index;
+    const to = from + delta;
+    const currentQueue = state.queueState.queue;
+    if (to < 0 || to >= currentQueue.length) return;
+    const copy = [...currentQueue];
+    const [item] = copy.splice(from, 1);
+    if (!item) return;
+    copy.splice(to, 0, item);
+    state.reorder(copy);
+  }, []);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (!open || Platform.OS !== 'web' || typeof window === 'undefined') return;
     const onKey = (event: KeyboardEvent) => {
       if (!event.altKey) return;
       if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      if (isTypingTarget(event.target)) return;
       event.preventDefault();
-      moveBy(index, event.key === 'ArrowUp' ? -1 : 1);
+      moveBy(event.key === 'ArrowUp' ? -1 : 1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [index, moveBy]);
+  }, [moveBy, open]);
 
-  const renderItem = ({ item, drag, isActive, getIndex }: RenderItemParams<Track>) => {
-    const position = getIndex() ?? 0;
-    const isCurrent = item.id === current?.id;
-    return (
+  const renderItem = useCallback(
+    ({ item, drag, isActive }: RenderItemParams<Track>) => (
       <QueueRow
         item={item}
-        position={position}
-        isCurrent={isCurrent}
-        isPlaying={isCurrent && status === 'playing'}
         isActive={isActive}
-        drag={() => requestDrag(drag)}
+        drag={drag}
+        onDrag={requestDrag}
         onPlayNext={moveToUpNext}
         onTrash={trashAt}
         onDismissToast={hideToast}
-        onHeight={handleRowHeight}
+        onLayout={onRowLayout}
       />
-    );
-  };
+    ),
+    [hideToast, moveToUpNext, onRowLayout, requestDrag, trashAt],
+  );
+
+  const onContainerLayout = useCallback(
+    ({ layout }: { layout: { height: number } }) => {
+      const height = layout.height;
+      if (height <= 0) return;
+      listHeightRef.current = height;
+      setListHeight((current) => (Math.abs(current - height) < 0.5 ? current : height));
+      if (alignPendingRef.current && !alignedOnceRef.current) {
+        requestAnimationFrame(() => requestAnimationFrame(alignToCurrent));
+      }
+    },
+    [alignToCurrent],
+  );
+
+  const onContentSizeChange = useCallback(() => {
+    if (alignPendingRef.current && !alignedOnceRef.current) {
+      requestAnimationFrame(alignToCurrent);
+    }
+  }, [alignToCurrent]);
+
+  const onDragBegin = useCallback(
+    (dragIndex: number) => {
+      // A previous drag may have been cancelled before its timer/release ran.
+      clearHold();
+      armedRef.current = false;
+      dragLockedRef.current = true;
+      handledRef.current = false;
+      draggingRef.current = dragIndex;
+    },
+    [clearHold],
+  );
+
+  const onPlaceholderIndexChange = useCallback(
+    (placeholderIndex: number) => {
+      const from = draggingRef.current;
+      if (
+        placeholderIndex === 0 &&
+        from !== null &&
+        from > 0 &&
+        from !== usePlayerStore.getState().queueState.index
+      ) {
+        setTopHold(true);
+        if (!holdTimer.current) {
+          holdTimer.current = setTimeout(() => {
+            armedRef.current = true;
+            setPlayNextArmed(true);
+            selectFeedback();
+          }, 650);
+        }
+      } else {
+        clearHold();
+      }
+    },
+    [clearHold],
+  );
+
+  const onRelease = useCallback(
+    (from: number) => {
+      // The release owns the intent. Cancel the 650 ms timer here: onDragEnd
+      // fires only after the drop spring, so a quick drop must not arm late.
+      const armed = armedRef.current;
+      clearHold();
+      if (armed && from !== usePlayerStore.getState().queueState.index) {
+        handledRef.current = true;
+        draggingRef.current = null;
+        moveToUpNext(from);
+      }
+    },
+    [clearHold, moveToUpNext],
+  );
+
+  const onDragEnd = useCallback(
+    ({ from, to, data }: DragEndParams<Track>) => {
+      releaseDragLock();
+      if (handledRef.current) {
+        handledRef.current = false;
+        return;
+      }
+      clearHold();
+      draggingRef.current = null;
+      const current = usePlayerStore.getState().queueState.queue;
+      const unchanged =
+        from === to ||
+        (current.length === data.length &&
+          current.every((track, index) => track.id === data[index]?.id));
+      if (!unchanged) reorder(data);
+    },
+    [clearHold, releaseDragLock, reorder],
+  );
+
+  const contentStyle = useMemo(
+    () => ({
+      paddingBottom: insets.bottom + 24 + Math.max(0, listHeight - rowPitch),
+    }),
+    [insets.bottom, listHeight, rowPitch],
+  );
 
   return (
     <View
@@ -224,26 +398,7 @@ export function QueuePanel({
         </IconButton>
       </View>
 
-      {upNext.length ? (
-        <View style={styles.upNext}>
-          <Text variant="label" tone="accent">
-            Up next
-          </Text>
-          {upNext.slice(0, MAX_UP_NEXT_ROWS).map((track) => (
-            <View key={track.id} style={styles.upNextRow}>
-              <Artwork coverArt={track.coverArt} size={34} radius={6} />
-              <Text variant="caption" numberOfLines={1} style={styles.upNextText}>
-                {track.title}
-              </Text>
-            </View>
-          ))}
-          {upNext.length > MAX_UP_NEXT_ROWS ? (
-            <Text variant="caption" tone="tertiary">
-              +{upNext.length - MAX_UP_NEXT_ROWS} more
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
+      <UpNextPreview tracks={upNext} />
 
       {queue.length ? (
         <>
@@ -262,84 +417,37 @@ export function QueuePanel({
               </Text>
             ) : null}
           </View>
-          <View style={styles.list} onLayout={handleListLayout}>
-            {listHeight > 0 ? (
-              <DraggableFlatList
-                ref={listRef}
-                testID="queue-list"
-                data={queue}
-                keyExtractor={(item) => item.id}
-                renderItem={renderItem}
-                getItemLayout={getItemLayout}
-                initialScrollIndex={initialIndex}
-                onDragBegin={(dragIndex) => {
-                  dragLockedRef.current = true;
-                  handledRef.current = false;
-                  draggingRef.current = dragIndex;
-                }}
-                onPlaceholderIndexChange={(placeholderIndex) => {
-                  if (
-                    placeholderIndex === 0 &&
-                    draggingRef.current !== null &&
-                    draggingRef.current > 0 &&
-                    draggingRef.current !== index
-                  ) {
-                    setTopHold(true);
-                    if (!holdTimer.current) {
-                      holdTimer.current = setTimeout(() => {
-                        armedRef.current = true;
-                        setPlayNextArmed(true);
-                        selectFeedback();
-                      }, 650);
-                    }
-                  } else {
-                    clearHold();
-                  }
-                }}
-                onRelease={(from) => {
-                  // onDragEnd fires only after the snap-back animation. Move
-                  // the row immediately so Up next does not wait for it.
-                  if (armedRef.current && from !== index) {
-                    handledRef.current = true;
-                    clearHold();
-                    draggingRef.current = null;
-                    moveToUpNext(from);
-                  }
-                }}
-                onDragEnd={({ data }) => {
-                  releaseDragLock();
-                  if (handledRef.current) {
-                    handledRef.current = false;
-                    return;
-                  }
-                  const armed = armedRef.current;
-                  const from = draggingRef.current;
-                  clearHold();
-                  draggingRef.current = null;
-                  if (armed && from !== null) {
-                    moveToUpNext(from);
-                  } else {
-                    reorder(data);
-                  }
-                }}
-                activationDistance={8}
-                onScrollBeginDrag={hideToast}
-                containerStyle={styles.listContainer}
-                // The extra bottom space lets the last track reach the top of
-                // the viewport; it is exactly the viewport height minus a row.
-                contentContainerStyle={{
-                  paddingBottom: insets.bottom + 24 + trailingSpace,
-                }}
-              />
-            ) : null}
-          </View>
+          <DraggableFlatList
+            ref={listRef}
+            testID="queue-list"
+            data={queue}
+            keyExtractor={queueKey}
+            renderItem={renderItem}
+            getItemLayout={getItemLayout}
+            windowSize={9}
+            initialNumToRender={15}
+            maxToRenderPerBatch={10}
+            onContainerLayout={onContainerLayout}
+            onContentSizeChange={onContentSizeChange}
+            onScrollToIndexFailed={handleScrollToIndexFailed}
+            onDragBegin={onDragBegin}
+            onPlaceholderIndexChange={onPlaceholderIndexChange}
+            onRelease={onRelease}
+            onDragEnd={onDragEnd}
+            activationDistance={8}
+            onScrollBeginDrag={hideToast}
+            containerStyle={styles.list}
+            // The extra bottom space lets the last track reach the top of the
+            // viewport; it is exactly the viewport height minus one row.
+            contentContainerStyle={contentStyle}
+          />
         </>
       ) : (
         <EmptyState title="Queue is empty" message="Play an album or add tracks to start." />
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   root: {
@@ -359,9 +467,6 @@ const styles = StyleSheet.create({
   list: {
     flex: 1,
     marginTop: 6,
-  },
-  listContainer: {
-    flex: 1,
   },
   dropHint: {
     minHeight: 26,

@@ -9,6 +9,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { useUIStore } from '@/stores/ui';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Text, type TextProps, type TextVariant } from '@/ui/Text';
 
@@ -35,6 +36,7 @@ export function MarqueeText({
   paused = false,
 }: MarqueeTextProps) {
   const theme = useTheme();
+  const foreground = useUIStore((state) => state.foreground);
   const [containerWidth, setContainerWidth] = useState(0);
   const [measurement, setMeasurement] = useState({ text: '', width: 0 });
   const offset = useSharedValue(0);
@@ -47,7 +49,7 @@ export function MarqueeText({
 
   useEffect(() => {
     cancelAnimation(offset);
-    if (paused || overflow <= 0 || theme.reduceMotion) {
+    if (paused || overflow <= 0 || theme.reduceMotion || !foreground) {
       offset.set(0);
       return;
     }
@@ -66,7 +68,7 @@ export function MarqueeText({
         ),
       ),
     );
-  }, [distance, offset, overflow, paused, scrollDuration, theme.reduceMotion]);
+  }, [distance, foreground, offset, overflow, paused, scrollDuration, theme.reduceMotion]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: offset.get() }],
@@ -115,6 +117,10 @@ export function MarqueeText({
         importantForAccessibility="no-hide-descendants"
       >
         <Text
+          // Remount when the title changes: two titles can have exactly the
+          // same width, in which case no layout event would fire and the new
+          // title would never be measured as overflowing.
+          key={children}
           variant={variant}
           tone={tone}
           style={[style, styles.text]}

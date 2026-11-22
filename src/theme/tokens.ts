@@ -86,7 +86,7 @@ export const motion = {
   pressScale: 0.97,
   liftScale: 1.03,
   spring: { damping: 18, stiffness: 220, mass: 0.8 },
-  snappySpring: { damping: 20, stiffness: 320, mass: 0.7 },
+  snappySpring: { damping: 24, stiffness: 320, mass: 0.7 },
   /** Bottom sheets (queue, action sheets): critically damped, no overshoot. */
   /** Mini player ↔ full player morph (progress 0..1). */
   playerSpring: { damping: 30, stiffness: 420, mass: 0.6, overshootClamping: true },

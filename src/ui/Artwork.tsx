@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { memo } from 'react';
 import { Music2 } from '@/ui/icons';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { buildCoverUrl } from '@/core/subsonic/params';
@@ -16,7 +17,7 @@ export interface ArtworkProps {
   priority?: 'low' | 'normal' | 'high';
 }
 
-export function Artwork({
+export const Artwork = memo(function Artwork({
   coverArt,
   size = 56,
   radius,
@@ -50,7 +51,7 @@ export function Artwork({
           }
           style={styles.image}
           contentFit="cover"
-          transition={180}
+          transition={theme.reduceMotion ? 0 : 180}
           cachePolicy="memory-disk"
           recyclingKey={coverArt}
           priority={priority}
@@ -65,7 +66,7 @@ export function Artwork({
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   base: {

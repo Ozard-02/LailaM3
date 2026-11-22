@@ -11,6 +11,8 @@ export interface IconButtonProps {
   variant?: 'plain' | 'soft';
   disabled?: boolean;
   selected?: boolean;
+  /** Keep hidden duplicate controls out of the web tab order. */
+  focusable?: boolean;
 }
 
 export function IconButton({
@@ -21,6 +23,7 @@ export function IconButton({
   variant = 'plain',
   disabled = false,
   selected = false,
+  focusable = true,
 }: IconButtonProps) {
   const theme = useTheme();
   return (
@@ -29,6 +32,7 @@ export function IconButton({
       accessibilityLabel={label}
       accessibilityState={{ disabled, selected }}
       disabled={disabled}
+      focusable={focusable}
       onPress={onPress}
       style={[
         styles.base,

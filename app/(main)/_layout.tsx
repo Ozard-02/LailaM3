@@ -27,6 +27,7 @@ function sizeClass(width: number): SizeClass {
 
 export default function MainLayout() {
   const theme = useTheme();
+  const reduceMotion = theme.reduceMotion;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const size = sizeClass(width);
@@ -42,8 +43,8 @@ export default function MainLayout() {
 
   const openPlayer = useCallback(() => {
     setPlayerOpen(true);
-    playerProgress.set(withSpring(1, motion.playerSpring));
-  }, [playerProgress, setPlayerOpen]);
+    playerProgress.set(reduceMotion ? 1 : withSpring(1, motion.playerSpring));
+  }, [playerProgress, reduceMotion, setPlayerOpen]);
 
   // Drag release: NowPlayingBar already started the spring with velocity.
   const settlePlayer = useCallback(
@@ -57,13 +58,18 @@ export default function MainLayout() {
   // the layout and player on the first frame of the close made it stutter.
   // A re-open mid-close cancels the spring (finished = false), so no flip.
   const closePlayer = useCallback(() => {
+    if (reduceMotion) {
+      playerProgress.set(0);
+      setPlayerOpen(false);
+      return;
+    }
     playerProgress.set(
       withSpring(0, motion.playerSpring, (finished) => {
         'worklet';
         if (finished) runOnJS(setPlayerOpen)(false);
       }),
     );
-  }, [playerProgress, setPlayerOpen]);
+  }, [playerProgress, reduceMotion, setPlayerOpen]);
 
   // Keyboard Escape asks for a close without reaching into the spring, which
   // lives here. Ignore a stale request after the player is already closed.
@@ -92,6 +98,15 @@ export default function MainLayout() {
     lastHeight.current = height;
     if (!playerOpen) playerProgress.set(0);
   }, [height, playerOpen, playerProgress]);
+
+  // Clearing the queue removes the track and unmounts the player sheet. Park
+  // the shared state too; otherwise the app stays keyboard- and a11y-modal
+  // with no visible surface, and the next track mounts an invisible overlay.
+  useEffect(() => {
+    if (track || !playerOpen) return;
+    playerProgress.set(0);
+    setPlayerOpen(false);
+  }, [playerProgress, playerOpen, setPlayerOpen, track]);
 
   useEffect(() => {
     return useAuthStore.persist.onFinishHydration(() => setHydrated(true));
@@ -156,6 +171,7 @@ export default function MainLayout() {
         style={styles.row}
         accessibilityElementsHidden={playerOpen}
         importantForAccessibility={playerOpen ? 'no-hide-descendants' : 'auto'}
+        aria-hidden={playerOpen || undefined}
       >
         {size !== 'compact' ? <Rail /> : null}
 
@@ -180,6 +196,7 @@ export default function MainLayout() {
               playerProgress={playerProgress}
               playerHeight={height}
               playerStartY={playerStartY}
+              paused={playerOpen}
             />
           ) : null}
           {size === 'compact' && hasTrack ? (
@@ -192,6 +209,7 @@ export default function MainLayout() {
               playerProgress={playerProgress}
               playerHeight={height}
               playerStartY={playerStartY}
+              paused={playerOpen}
             />
           ) : null}
         </View>

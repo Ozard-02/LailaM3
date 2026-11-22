@@ -53,22 +53,24 @@ export function KeyboardBridge() {
           return;
         }
         // Let React Native Web modals run their own onRequestClose first; the
-        // player sheet is a dialog too but closes through its spring.
-        const modals = Array.from(document.querySelectorAll('[aria-modal="true"]'));
+        // player sheet is a dialog too, but it owns Escape (more menu, queue
+        // sheet, then the player itself). Closing it here as well would close
+        // the queue and the player on one key press.
+        const modals = Array.from(
+          document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+        );
         const hasOtherModal = modals.some(
           (node) => node.getAttribute('data-testid') !== 'player-sheet',
         );
         if (hasOtherModal) return;
-        if (ui.playerOpen) {
-          event.preventDefault();
-          ui.requestClosePlayer();
-          return;
-        }
+        // A root modal route is the top surface even when the player stays
+        // open underneath it (lyrics now does). Close the route, not the player.
         if (pathname === '/lyrics' || pathname === '/devices' || pathname === '/queue') {
           event.preventDefault();
           router.back();
+          return;
         }
-        return;
+        if (ui.playerOpen) return;
       }
 
       if (typing) return;

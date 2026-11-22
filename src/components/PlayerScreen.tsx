@@ -20,15 +20,7 @@ import {
   User,
 } from '@/ui/icons';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentRef,
-} from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -86,6 +78,7 @@ export const PlayerScreen = memo(function PlayerScreen({
   onSharedRect,
   onQueueOpenChange,
   queueProgress,
+  settled = false,
 }: {
   onClose: () => void;
   onOpenLibrary?: (href: string) => void;
@@ -96,8 +89,11 @@ export const PlayerScreen = memo(function PlayerScreen({
   onQueueOpenChange?: (open: boolean) => void;
   /** 0 = queue sheet down, 1 = up. Shared with PlayerSheet's overlay. */
   queueProgress?: SharedValue<number>;
+  /** The player morph has reached its rest position. */
+  settled?: boolean;
 }) {
   const theme = useTheme();
+  const reduceMotion = theme.reduceMotion;
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -122,9 +118,8 @@ export const PlayerScreen = memo(function PlayerScreen({
   const [moreOpen, setMoreOpen] = useState(false);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
-  const [queueMounted, setQueueMounted] = useState(false);
-  const [queueAlignToken, setQueueAlignToken] = useState(0);
-  const queueSheetRef = useRef<ComponentRef<typeof View>>(null);
+  const [queueTouched, setQueueTouched] = useState(false);
+  const [queueWarm, setQueueWarm] = useState(false);
   const [paletteGrace, setPaletteGrace] = useState<{ cover?: string; over: boolean }>({
     over: false,
   });
@@ -156,14 +151,18 @@ export const PlayerScreen = memo(function PlayerScreen({
   const artSize = split
     ? Math.max(120, Math.min(height * 0.6, wide ? 440 : width * 0.34))
     : Math.min(width - 56, 360);
+  // Hide the cover exactly at the screen edge; full viewport width overshoots
+  // by hundreds of pixels on tablets and wide windows.
+  const coverTravel = Math.max(1, (width + artSize) / 2);
   const { gesture: coverGesture, swipeX: coverX, swiped: coverSwiped } = useCoverSwipe({
-    distance: width,
+    distance: coverTravel,
     coverSize: artSize,
     enabled: !hideShared,
   });
   const artRef = useRef<React.ComponentRef<typeof View>>(null);
   const titleRef = useRef<React.ComponentRef<typeof View>>(null);
   const playRef = useRef<React.ComponentRef<typeof View>>(null);
+  const queueSheetRef = useRef<React.ComponentRef<typeof View>>(null);
 
   const reportRect = useCallback(
     (part: SharedPart, ref: React.RefObject<React.ComponentRef<typeof View> | null>) => {
@@ -176,18 +175,20 @@ export const PlayerScreen = memo(function PlayerScreen({
   // Closing the player resets the queue sheet so the next open starts clean.
   const close = useCallback(() => {
     setQueueOpen(false);
-    setQueueMounted(false);
+    setQueueTouched(false);
     queueP.set(0);
     onClose();
   }, [onClose, queueP]);
   const openLyrics = useCallback(() => {
     if (coverSwiped) return;
+    // Lyrics sits on top of the player. Keep the player open underneath so
+    // closing lyrics returns to the maximized player instead of the mini bar.
     router.push('/lyrics');
   }, [coverSwiped, router]);
   const openLibrary = useCallback(
     (href: string) => {
       setQueueOpen(false);
-      setQueueMounted(false);
+      setQueueTouched(false);
       queueP.set(0);
       if (onOpenLibrary) onOpenLibrary(href);
       else router.push(href as never);
@@ -199,40 +200,72 @@ export const PlayerScreen = memo(function PlayerScreen({
     onQueueOpenChange?.(queueOpen);
   }, [onQueueOpenChange, queueOpen]);
 
-  // The panel stays mounted after the first use. On web, `inert` keeps its
-  // off-screen controls out of the tab order while the sheet is down.
+  // Closing via F, Escape or an empty queue bypasses PlayerScreen's own close
+  // callbacks. Reset the React booleans during render (the same pattern the
+  // modal uses for its mounted flag) and park the shared value in an effect.
+  if (!active && queueOpen) setQueueOpen(false);
+  if (!active && queueTouched) setQueueTouched(false);
+  if (!active && queueWarm) setQueueWarm(false);
+  useEffect(() => {
+    if (!active) queueP.set(0);
+  }, [active, queueP]);
+
+  // Pre-mount the queue panel once the morph has landed, while it is still
+  // translated below the screen. The list mount and the first alignment then
+  // happen off-screen, so opening the queue is only the sheet spring. The short
+  // delay keeps that work out of the final morph frames; an earlier tap still
+  // mounts the panel immediately through `queueTouched`.
+  useEffect(() => {
+    if (!active || !settled || queueWarm) return;
+    const timer = setTimeout(() => setQueueWarm(true), 150);
+    return () => clearTimeout(timer);
+  }, [active, queueWarm, settled]);
+
+  // A closed queue sheet is translated off-screen but stays mounted. On web it
+  // must also leave the tab order, or its rows become invisible tab stops.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const node = queueSheetRef.current as unknown as HTMLElement | null;
     if (!node) return;
     if (queueOpen) node.removeAttribute('inert');
     else node.setAttribute('inert', '');
-  }, [queueMounted, queueOpen]);
+  }, [queueOpen, queueTouched, queueWarm]);
+
+  const focusQueueControl = useCallback((selector: string) => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-testid="player-sheet"] ${selector}`)
+        ?.focus();
+    });
+  }, []);
 
   // Button and swipe use the same spring; swipes hand over finger velocity.
-  // The panel mounts on touch-down so the first open does not mount it while
-  // the spring is already running, and the token aligns it before it moves.
-  const mountQueue = useCallback(() => setQueueMounted(true), []);
-  const prepareQueue = useCallback(() => {
-    setQueueMounted(true);
-    setQueueAlignToken((token) => token + 1);
-  }, []);
   const openQueueSheet = useCallback(() => {
-    prepareQueue();
     setQueueOpen(true);
-    queueP.set(withSpring(1, QUEUE_SPRING));
-  }, [prepareQueue, queueP]);
+    queueP.set(reduceMotion ? 1 : withSpring(1, QUEUE_SPRING));
+    // Focus after the first spring frames; focusing while the sheet is still
+    // at its resting position can paint one frame on top of the artwork.
+    setTimeout(() => focusQueueControl('[aria-label="Close queue"]'), 120);
+  }, [focusQueueControl, queueP, reduceMotion]);
 
   const closeQueueSheet = useCallback(() => {
     setQueueOpen(false);
-    queueP.set(withSpring(0, QUEUE_SPRING));
-  }, [queueP]);
+    queueP.set(reduceMotion ? 0 : withSpring(0, QUEUE_SPRING));
+    if (active) focusQueueControl('[aria-label="Open queue"]');
+  }, [active, focusQueueControl, queueP, reduceMotion]);
 
   // Web Escape closes the More/queue sheets first, then the player itself.
+  // A child React Native Web modal (Add to playlist) owns Escape through its
+  // own onRequestClose; closing the player at the same time is wrong.
   useEffect(() => {
     if (!active || Platform.OS !== 'web' || typeof window === 'undefined') return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const childDialog = document.querySelector(
+        '[role="dialog"][aria-modal="true"]:not([data-testid="player-sheet"])',
+      );
+      if (childDialog) return;
       event.preventDefault();
       if (moreOpen) {
         setMoreOpen(false);
@@ -282,13 +315,17 @@ export const PlayerScreen = memo(function PlayerScreen({
           const shouldClose = queueP.get() < 0.78 || event.velocityY > 650;
           runOnJS(setQueueOpen)(!shouldClose);
           queueP.set(
-            withSpring(shouldClose ? 0 : 1, {
-              ...QUEUE_SPRING,
-              velocity: -event.velocityY / sheetHeight,
-            }),
+            reduceMotion
+              ? shouldClose
+                ? 0
+                : 1
+              : withSpring(shouldClose ? 0 : 1, {
+                  ...QUEUE_SPRING,
+                  velocity: -event.velocityY / sheetHeight,
+                }),
           );
         }),
-    [queueP, sheetHeight],
+    [queueP, reduceMotion, sheetHeight],
   );
 
   const queueGesture = useMemo(
@@ -296,9 +333,8 @@ export const PlayerScreen = memo(function PlayerScreen({
       Gesture.Pan()
         .activeOffsetY([-8, 8])
         .onBegin(() => {
-          // Touch-down on the handle: mount and align the panel before the
-          // sheet moves.
-          runOnJS(prepareQueue)();
+          // Touch-down on the handle: mount the panel before the sheet moves.
+          runOnJS(setQueueTouched)(true);
         })
         .onUpdate((event) => {
           queueP.set(Math.max(0, Math.min(1, -event.translationY / sheetHeight)));
@@ -307,13 +343,17 @@ export const PlayerScreen = memo(function PlayerScreen({
           const shouldOpen = queueP.get() > 0.28 || event.velocityY < -600;
           runOnJS(setQueueOpen)(shouldOpen);
           queueP.set(
-            withSpring(shouldOpen ? 1 : 0, {
-              ...QUEUE_SPRING,
-              velocity: -event.velocityY / sheetHeight,
-            }),
+            reduceMotion
+              ? shouldOpen
+                ? 1
+                : 0
+              : withSpring(shouldOpen ? 1 : 0, {
+                  ...QUEUE_SPRING,
+                  velocity: -event.velocityY / sheetHeight,
+                }),
           );
         }),
-    [prepareQueue, queueP, sheetHeight],
+    [queueP, reduceMotion, sheetHeight],
   );
 
   // With the morph overlay in charge, the real shared elements stay mounted
@@ -441,7 +481,7 @@ export const PlayerScreen = memo(function PlayerScreen({
         </View>
         <View style={styles.topActions}>
           <FavouriteButton key={track.id} track={track} />
-          <IconButton label="Devices" size={42} variant="soft" onPress={() => router.push('/devices')}>
+          <IconButton label="Devices" size={42} variant="soft" onPress={() => openLibrary('/devices')}>
             <Cast size={19} color={theme.colors.text} />
           </IconButton>
           <IconButton label="More options" size={42} variant="soft" onPress={() => setMoreOpen(true)}>
@@ -473,9 +513,14 @@ export const PlayerScreen = memo(function PlayerScreen({
                 accessibilityLabel="Album cover: tap for lyrics, swipe left or right for previous or next"
                 onPress={openLyrics}
                 haptic={false}
+                // The morph overlay is the visible cover while `hideShared`;
+                // this hidden copy must not take taps in the exposed gap.
+                disabled={hideShared && !queueOpen}
+                focusable={!hideShared || queueOpen}
+                scaleTo={1}
               >
                 <Artwork
-                  key={track.id}
+                  key={track.coverArt ?? track.id}
                   coverArt={track.coverArt}
                   size={artSize}
                   radius={hideShared ? 10 : wide ? 18 : 14}
@@ -492,6 +537,7 @@ export const PlayerScreen = memo(function PlayerScreen({
               collapsable={false}
               onLayout={() => reportRect('title', titleRef)}
               style={sharedStyle}
+              aria-hidden={hideShared}
             >
               <MarqueeText variant={wide ? 'display' : 'title'} paused={hideShared && !queueOpen}>
                 {track.title}
@@ -531,6 +577,7 @@ export const PlayerScreen = memo(function PlayerScreen({
                 label={isPlaying ? 'Pause' : 'Play'}
                 size={72}
                 variant="soft"
+                focusable={!hideShared || queueOpen}
                 onPress={() => void toggle()}
               >
                 {isPlaying ? (
@@ -558,10 +605,10 @@ export const PlayerScreen = memo(function PlayerScreen({
         </View>
       </View>
 
-      {/* Mounted on touch-down of the queue handle, not when the player
-          settles: mounting at the end of the morph cost the open 150-250 ms
-          frames. Once touched it stays mounted, so later opens are warm. */}
-      {queueOpen || queueMounted ? (
+      {/* Pre-mounted off-screen after the morph settles, so the first open is
+          only the sheet spring. An early tap mounts it through `queueTouched`;
+          once mounted it stays warm until the player closes. */}
+      {queueOpen || queueTouched || queueWarm ? (
         <Animated.View
           ref={queueSheetRef}
           testID="queue-sheet"
@@ -584,11 +631,7 @@ export const PlayerScreen = memo(function PlayerScreen({
               <View style={[styles.sheetGrabber, { backgroundColor: theme.colors.textTertiary }]} />
             </View>
           </GestureDetector>
-          <QueuePanel
-            onClose={closeQueueSheet}
-            topPadding={4}
-            alignToken={queueAlignToken}
-          />
+          <QueuePanel onClose={closeQueueSheet} topPadding={4} open={queueOpen} />
         </Animated.View>
       ) : null}
 
@@ -597,7 +640,6 @@ export const PlayerScreen = memo(function PlayerScreen({
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Open queue"
-            onPressIn={mountQueue}
             onPress={openQueueSheet}
             haptic={false}
           >

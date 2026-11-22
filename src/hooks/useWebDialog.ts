@@ -45,12 +45,26 @@ export function useWebDialog(
       (autoFocusSelector ? node.querySelector<HTMLElement>(autoFocusSelector) : null) ??
       focusables()[0] ??
       node;
+    if (initial === node && !node.hasAttribute('tabindex')) node.tabIndex = -1;
     const timer = window.setTimeout(() => initial.focus(), 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
+      // A child modal (Add to playlist) owns the keyboard while it is up.
+      const childModal = document.querySelector(
+        '[role="dialog"][aria-modal="true"]:not([data-testid="player-sheet"])',
+      );
+      if (childModal) return;
       const list = focusables();
       if (list.length === 0) return;
+      if (!node.contains(document.activeElement)) {
+        // Focus can fall to <body> after a nested sheet closes or an inert
+        // subtree is removed. Recover into the dialog instead of tabbing into
+        // the background.
+        event.preventDefault();
+        list[0]!.focus();
+        return;
+      }
       const first = list[0]!;
       const last = list[list.length - 1]!;
       if (event.shiftKey && document.activeElement === first) {
@@ -62,11 +76,13 @@ export function useWebDialog(
       }
     };
 
-    node.addEventListener('keydown', onKeyDown);
+    // Capture at document level: a keydown on <body> never bubbles through
+    // the dialog node, so a node listener could not recover lost focus.
+    document.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.clearTimeout(timer);
-      node.removeEventListener('keydown', onKeyDown);
-      previous?.focus?.();
+      document.removeEventListener('keydown', onKeyDown, true);
+      if (previous && document.contains(previous)) previous.focus();
     };
   }, [autoFocusSelector, open, ref]);
 }

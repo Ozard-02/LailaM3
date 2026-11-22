@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomChromeInset } from '@/hooks/useBottomChromeInset';
@@ -35,27 +35,39 @@ export function VirtualTrackList({
   const padding = width < 600 ? 16 : 28;
   const [moreTrack, setMoreTrack] = useState<Track | null>(null);
 
+  // Opening the per-track menu only changes local state. Keep the list props
+  // stable so it does not reconcile every mounted row for that.
+  const keyExtractor = useCallback((item: Track, index: number) => `${item.id}-${index}`, []);
+  const renderItem = useCallback(
+    ({ item, index }: { item: Track; index: number }) => (
+      <View style={{ paddingHorizontal: padding }}>
+        <TrackRow
+          track={item}
+          index={index}
+          onPlay={() => onPlay(index)}
+          onMore={() => setMoreTrack(item)}
+        />
+      </View>
+    ),
+    [onPlay, padding],
+  );
+  const contentContainerStyle = useMemo(
+    () => ({
+      paddingTop: insets.top + 18,
+      paddingBottom: chromeInset + 32,
+    }),
+    [chromeInset, insets.top],
+  );
+
   return (
     <>
       <VirtualList
         data={tracks}
-        keyExtractor={(item, index) => `${item.id}-${index}`}
-        renderItem={({ item, index }) => (
-          <View style={{ paddingHorizontal: padding }}>
-            <TrackRow
-              track={item}
-              index={index}
-              onPlay={() => onPlay(index)}
-              onMore={() => setMoreTrack(item)}
-            />
-          </View>
-        )}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
         ListHeaderComponent={header}
         ListFooterComponent={footer}
-        contentContainerStyle={{
-          paddingTop: insets.top + 18,
-          paddingBottom: chromeInset + 32,
-        }}
+        contentContainerStyle={contentContainerStyle}
         showsVerticalScrollIndicator={false}
       />
       {moreTrack ? (

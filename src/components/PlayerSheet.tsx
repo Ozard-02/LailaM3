@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { Pause, Play } from '@/ui/icons';
-import { useCallback, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -8,6 +8,7 @@ import Animated, {
   useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
+  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import { MarqueeText } from '@/components/MarqueeText';
@@ -54,6 +55,9 @@ export function PlayerSheet({
   const theme = useTheme();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
+  // Split/wide layouts place the cover beside the info column. The swipe
+  // must stay inside the artwork stage there (see `artStyle`).
+  const clipCover = width >= 900 || (width > height && width >= 620);
   const track = useCurrentTrack();
   const status = usePlayerStore((state) => state.status);
   const toggle = usePlayerStore((state) => state.toggle);
@@ -67,6 +71,7 @@ export function PlayerSheet({
   const wasSettled = useSharedValue(false);
   const wasParked = useSharedValue(true);
   const sheetRef = useRef<ComponentRef<typeof View>>(null);
+  const pendingRoute = useRef<string | null>(null);
 
   useWebDialog(open, sheetRef, '[aria-label="Close player"]');
 
@@ -178,17 +183,41 @@ export function PlayerSheet({
   const play = rects.play;
   const titleRect = rects.title;
   const artSize = art ? Math.round(art.width) : 0;
+  // The swiped cover only has to leave its visible stage. On a clipped split
+  // layout that is the artwork width; on a phone it is half the viewport plus
+  // half the cover. Using the full viewport everywhere left a long empty gap.
+  const coverTravel = Math.max(1, clipCover ? artSize : (width + artSize) / 2);
   const {
     gesture: coverGesture,
     swipeX: artSwipeX,
     swiped: coverSwiped,
   } = useCoverSwipe({
-    distance: width,
+    distance: coverTravel,
     coverSize: artSize || undefined,
     enabled: settledAtOne,
   });
+
+  // Navigate only after the close spring has parked the sheet. Pushing while
+  // `playerOpen` is still true leaves an aria-modal dialog underneath the new
+  // route and steals focus back to the previous screen.
+  const navigateAfterClose = useCallback(
+    (href: string) => {
+      pendingRoute.current = href;
+      queueProgress.set(0);
+      onClose();
+    },
+    [onClose, queueProgress],
+  );
+  useEffect(() => {
+    const href = pendingRoute.current;
+    if (open || !href) return;
+    pendingRoute.current = null;
+    router.push(href as never);
+  }, [open, router]);
+
   const openLyrics = useCallback(() => {
     if (coverSwiped) return;
+    // Do not park the sheet: lyrics opens over the still-open player.
     router.push('/lyrics');
   }, [coverSwiped, router]);
 
@@ -203,7 +232,9 @@ export function PlayerSheet({
       if (p < 0.99 && !closeStarted.get()) {
         closeStarted.set(true);
         queueProgress.set(0);
-        artSwipeX.set(0);
+        // A close can catch a committed cover swipe mid-return. Ease the
+        // residual offset out instead of teleporting the artwork sideways.
+        artSwipeX.set(theme.reduceMotion ? 0 : withTiming(0, { duration: 150 }));
         // No React commit at the start of the close: `settledAtOne` flips once
         // the overlay is parked, in the reaction above. The only state that
         // must go now is the queue sheet, which is not on the close path.
@@ -277,12 +308,24 @@ export function PlayerSheet({
     return {
       opacity: Math.min(1, p * 8),
       transform: [
-        { translateX: (compactArtCx - artTargetCx) * (1 - eased) + artSwipeX.get() },
+        {
+          translateX:
+            (compactArtCx - artTargetCx) * (1 - eased) +
+            (clipCover ? 0 : artSwipeX.get()),
+        },
         { translateY: cy - artTargetCy },
         { scale },
       ],
     };
   });
+
+  // On split/wide layouts the cover sits beside the title, progress and
+  // transport. A full-viewport swipe would paint it over those controls, so
+  // clip the horizontal travel to the artwork stage there. On phones the
+  // cover still crosses the whole screen, as before.
+  const artSwipeStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: artSwipeX.get() }],
+  }));
 
   const playTargetCx = play ? play.x + play.width / 2 : 0;
   const playTargetCy = play ? play.y + play.height / 2 : 0;
@@ -327,14 +370,30 @@ export function PlayerSheet({
 
   const openLibrary = useCallback(
     (href: string) => {
-      handleClose();
-      router.push(href as never);
+      navigateAfterClose(href);
     },
-    [handleClose, router],
+    [navigateAfterClose],
   );
 
   const isPlaying = status === 'playing';
   const wide = width >= 900;
+  const renderCover = (current: NonNullable<typeof track>) => (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel="Album cover: tap for lyrics, swipe left or right for previous or next"
+      onPress={openLyrics}
+      haptic={false}
+      focusable={!queueOpen}
+      scaleTo={1}
+    >
+      <Artwork
+        key={current.coverArt ?? current.id}
+        coverArt={current.coverArt}
+        size={artSize}
+        radius={10}
+      />
+    </PressableScale>
+  );
 
   return (
     <View
@@ -376,6 +435,7 @@ export function PlayerSheet({
           hideShared={morph}
           queueProgress={queueProgress}
           reducedEffects={false}
+          settled={settledAtOne}
           onSharedRect={onSharedRect}
           onQueueOpenChange={setQueueOpen}
         />
@@ -396,14 +456,15 @@ export function PlayerSheet({
                 pointerEvents={settledAtOne ? 'auto' : 'none'}
                 style={[artBox, artStyle]}
               >
-                <PressableScale
-                  accessibilityRole="button"
-                  accessibilityLabel="Album cover: tap for lyrics, swipe left or right for previous or next"
-                  onPress={openLyrics}
-                  haptic={false}
-                >
-                  <Artwork key={track.id} coverArt={track.coverArt} size={artSize} radius={10} />
-                </PressableScale>
+                {clipCover ? (
+                  <View style={styles.artClip}>
+                    <Animated.View style={[styles.artSlide, artSwipeStyle]}>
+                      {renderCover(track)}
+                    </Animated.View>
+                  </View>
+                ) : (
+                  renderCover(track)
+                )}
               </Animated.View>
             </GestureDetector>
           ) : null}
@@ -431,6 +492,7 @@ export function PlayerSheet({
                 label={isPlaying ? 'Pause' : 'Play'}
                 size={72}
                 variant="soft"
+                focusable={!queueOpen}
                 onPress={() => void toggle()}
               >
                 {isPlaying ? (
@@ -479,6 +541,16 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  artClip: {
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+    borderRadius: 10,
+  },
+  artSlide: {
+    width: '100%',
+    height: '100%',
   },
   expanded: {
     position: 'absolute',

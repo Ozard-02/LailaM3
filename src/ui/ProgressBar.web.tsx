@@ -44,6 +44,7 @@ export function ProgressBar({
   const [dragging, setDragging] = useState(false);
   const barRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const draggingRef = useRef(false);
 
   const ratio = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
   const displayRatio = scrub ?? ratio;
@@ -68,13 +69,45 @@ export function ProgressBar({
     [max, onSeek],
   );
 
-  const commitFromClientX = useCallback(
+  const ratioFromClientX = useCallback(
     (clientX: number) => {
       const rect = barRef.current?.getBoundingClientRect();
-      if (!rect || rect.width <= 0) return;
-      commit(((clientX - rect.left) / rect.width) * max);
+      if (!rect || rect.width <= 0) return null;
+      return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     },
-    [commit, max],
+    [],
+  );
+
+  const previewFromClientX = useCallback(
+    (clientX: number) => {
+      const next = ratioFromClientX(clientX);
+      if (next === null) return;
+      setScrub(next);
+    },
+    [ratioFromClientX],
+  );
+
+  const commitFromClientX = useCallback(
+    (clientX: number) => {
+      const next = ratioFromClientX(clientX);
+      if (next === null) return;
+      commit(next * max);
+    },
+    [commit, max, ratioFromClientX],
+  );
+
+  const endDrag = useCallback(
+    (clientX?: number) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      // One real seek per gesture. Without this, a pointermove-rate set of
+      // `currentTime` writes made scrubbing audibly stutter and flooded the
+      // Segue bridge with state reports.
+      if (clientX !== undefined) commitFromClientX(clientX);
+      setDragging(false);
+      setInteracting(false);
+    },
+    [commitFromClientX],
   );
 
   // Track the drag on the window, not the input, so Firefox also follows a
@@ -82,20 +115,18 @@ export function ProgressBar({
   // and only supplies focus/keyboard/accessibility semantics.
   useEffect(() => {
     if (!dragging || typeof window === 'undefined') return;
-    const move = (event: PointerEvent) => commitFromClientX(event.clientX);
-    const end = () => {
-      setDragging(false);
-      setInteracting(false);
-    };
+    const move = (event: PointerEvent) => previewFromClientX(event.clientX);
+    const end = (event: PointerEvent) => endDrag(event.clientX);
+    const cancel = () => endDrag();
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    window.addEventListener('pointercancel', cancel);
     return () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
+      window.removeEventListener('pointercancel', cancel);
     };
-  }, [commitFromClientX, dragging]);
+  }, [dragging, endDrag, previewFromClientX]);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (!onSeek || max <= 0) return;
@@ -214,18 +245,16 @@ export function ProgressBar({
         if (!onSeek) return;
         event.preventDefault();
         inputRef.current?.focus();
+        draggingRef.current = true;
         setDragging(true);
         setInteracting(true);
-        commitFromClientX(event.clientX);
+        // Preview only. The release commits one real seek, including a plain
+        // click (the wrapper's onPointerUp still fires before the window
+        // listener is installed).
+        previewFromClientX(event.clientX);
       }}
-      onPointerUp={() => {
-        setDragging(false);
-        setInteracting(false);
-      }}
-      onPointerCancel={() => {
-        setDragging(false);
-        setInteracting(false);
-      }}
+      onPointerUp={(event: React.PointerEvent<HTMLDivElement>) => endDrag(event.clientX)}
+      onPointerCancel={() => endDrag()}
     >
       {onSeek ? (
         <input

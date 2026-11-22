@@ -3,12 +3,13 @@ import {
   startTransition,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type PropsWithChildren,
 } from 'react';
-import { useColorScheme } from 'react-native';
+import { AccessibilityInfo, Platform, useColorScheme } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import {
   darkColors,
@@ -60,8 +61,33 @@ function rememberPalette(url: string, palette: ArtworkPalette): void {
 export function ThemeProvider({ children }: PropsWithChildren) {
   const scheme = useColorScheme();
   const mode: ThemeMode = scheme === 'light' ? 'light' : 'dark';
-  const reduceMotion = useReducedMotion();
+  // Reanimated's useReducedMotion is a startup-only constant. Start from it so
+  // the first render is correct, then follow the system setting live.
+  const initialReduceMotion = useReducedMotion();
+  const [reduceMotion, setReduceMotion] = useState(initialReduceMotion);
   const [artwork, setArtwork] = useState<ArtworkPalette>(neutralPalette);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined' || !window.matchMedia) return;
+      const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const update = () => setReduceMotion(query.matches);
+      query.addEventListener?.('change', update);
+      return () => query.removeEventListener?.('change', update);
+    }
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (mounted) setReduceMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged',
+      setReduceMotion,
+    );
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
   const [artworkUrl, setArtworkUrl] = useState<string | undefined>(undefined);
   const [isArtwork, setIsArtwork] = useState(false);
   const customAccent = useSettingsStore((state) => state.accentColor);

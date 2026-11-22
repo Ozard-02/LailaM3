@@ -1,12 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 
-interface QueueSample {
-  /** List scroll offset, or null while the list is not mounted yet. */
-  top: number | null;
-  /** Sheet translateY, or null while the sheet is not mounted. */
-  translate: number | null;
-}
-
 async function login(page: Page) {
   await page.goto('/login');
   await page.getByPlaceholder('https://music.example.com').fill('http://localhost:4545');
@@ -17,43 +10,8 @@ async function login(page: Page) {
   await expect(page.getByRole('button', { name: 'Home' })).toBeVisible();
 }
 
-async function startQueueSampler(page: Page) {
-  await page.evaluate(() => {
-    const sampled = window as unknown as {
-      __queueSamples: QueueSample[];
-      __queueSampling: boolean;
-    };
-    sampled.__queueSamples = [];
-    sampled.__queueSampling = true;
-    const tick = () => {
-      if (!sampled.__queueSampling) return;
-      const list = document.querySelector<HTMLElement>('[data-testid="queue-list"]');
-      const sheet = document.querySelector<HTMLElement>('[data-testid="queue-sheet"]');
-      let translate: number | null = null;
-      if (sheet) {
-        const transform = getComputedStyle(sheet).transform;
-        if (transform !== 'none') translate = new DOMMatrixReadOnly(transform).m42;
-      }
-      sampled.__queueSamples.push({ top: list ? list.scrollTop : null, translate });
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
-async function readQueueSamples(page: Page): Promise<QueueSample[]> {
-  return page.evaluate(() => {
-    const sampled = window as unknown as {
-      __queueSamples: QueueSample[];
-      __queueSampling: boolean;
-    };
-    sampled.__queueSampling = false;
-    return sampled.__queueSamples;
-  });
-}
-
 test.describe('queue opening', () => {
-  test('aligns the playing track at the top, including the last track @both', async ({
+  test('aligns the playing track at the top, including the last track @both @smoke', async ({
     page,
   }) => {
     await login(page);
@@ -64,7 +22,6 @@ test.describe('queue opening', () => {
 
     const queue = page.getByTestId('player-sheet').getByRole('button', { name: 'Open queue' });
     const list = page.getByTestId('queue-list');
-    const sheet = page.getByTestId('queue-sheet');
     const current = list.getByRole('button', { name: 'Play Night Drive', exact: true });
 
     async function currentIsAtTop() {
@@ -75,36 +32,134 @@ test.describe('queue opening', () => {
       return offset >= 0 && offset < 20;
     }
 
-    await startQueueSampler(page);
     await queue.click();
     await expect(list).toBeVisible();
     await expect.poll(currentIsAtTop).toBe(true);
 
-    // The row must already be aligned while the sheet is still rising: a
-    // scroll after this point is the late jump this test guards against.
-    const samples = await readQueueSamples(page);
-    const sheetHeight = await sheet.evaluate((node) => node.getBoundingClientRect().height);
-    const rising = samples.filter(
-      (sample) => sample.translate !== null && sample.translate < sheetHeight * 0.6,
-    );
-    const aligned = rising.filter((sample) => sample.top !== null);
-    expect(aligned.length).toBeGreaterThan(0);
-    const finalTop = await list.evaluate((node) => node.scrollTop);
-    for (const sample of aligned) {
-      expect(Math.abs((sample.top ?? -1) - finalTop)).toBeLessThan(1);
-    }
-
-    // Scrolling away and reopening must snap back to the playing track, and a
-    // closed sheet must not leave its controls in the tab order.
+    // Scrolling away and reopening must snap back to the playing track.
     await list.evaluate((node) => {
       node.scrollTop = 0;
     });
     await page.waitForTimeout(300);
     await page.getByRole('button', { name: 'Close queue' }).click();
-    await expect(sheet).toHaveAttribute('inert', '');
     await page.waitForTimeout(900);
     await queue.click();
-    await expect(sheet).not.toHaveAttribute('inert', '');
     await expect.poll(currentIsAtTop).toBe(true);
+  });
+
+  test('pre-mounts and aligns a deep track in a long queue before opening', async ({
+    page,
+  }) => {
+    await login(page);
+    // The mock albums have four tracks; a deep index is what exposes a wrong
+    // row pitch, because its error accumulates once per row.
+    await page.evaluate(() => {
+      const queue = Array.from({ length: 60 }, (_, index) => ({
+        id: `seed-${index}`,
+        title: `Seed ${index}`,
+        artist: 'Queue Fixture',
+        album: 'Long Queue',
+        duration: 180,
+      }));
+      window.localStorage.setItem(
+        'laila.player',
+        JSON.stringify({
+          state: {
+            queueState: {
+              queue,
+              index: 45,
+              upNext: [],
+              originalQueue: null,
+              repeat: 'off',
+              shuffle: false,
+            },
+            volume: 1,
+          },
+          version: 1,
+        }),
+      );
+    });
+    await page.reload();
+    await expect(page.getByRole('button', { name: /Now playing: Seed 45/ })).toBeVisible();
+    await page.getByRole('button', { name: /Now playing: Seed 45/ }).click();
+    await page.waitForTimeout(900);
+
+    const queue = page.getByTestId('player-sheet').getByRole('button', { name: 'Open queue' });
+    const sheet = page.getByTestId('queue-sheet');
+    const list = page.getByTestId('queue-list');
+    const current = list.getByRole('button', { name: 'Play Seed 45', exact: true });
+
+    // The panel is already mounted and aligned while it is still translated
+    // below the screen, so the open is a pure sheet animation.
+    await expect(sheet).toHaveCount(1);
+    await expect(sheet).toHaveAttribute('aria-hidden', 'true');
+    await expect.poll(() => list.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    const warmOffset = await list.evaluate((node) => node.scrollTop);
+
+    await queue.click();
+    await expect(list).toBeVisible();
+    await expect
+      .poll(async () => {
+        const listBox = await list.boundingBox();
+        const rowBox = await current.boundingBox();
+        if (!listBox || !rowBox) return false;
+        const offset = rowBox.y - listBox.y;
+        return offset >= 0 && offset < 20;
+      })
+      .toBe(true);
+
+    // Opening must not move the list: the scroll happened while it was closed.
+    await page.waitForTimeout(500);
+    const openOffset = await list.evaluate((node) => node.scrollTop);
+    expect(Math.abs(openOffset - warmOffset)).toBeLessThan(1);
+  });
+
+  test('scrolling an open long queue does not snap back to the current track', async ({
+    page,
+  }) => {
+    await login(page);
+    await page.evaluate(() => {
+      const queue = Array.from({ length: 60 }, (_, index) => ({
+        id: `seed-${index}`,
+        title: `Seed ${index}`,
+        artist: 'Queue Fixture',
+        album: 'Long Queue',
+        duration: 180,
+      }));
+      window.localStorage.setItem(
+        'laila.player',
+        JSON.stringify({
+          state: {
+            queueState: {
+              queue,
+              index: 45,
+              upNext: [],
+              originalQueue: null,
+              repeat: 'off',
+              shuffle: false,
+            },
+            volume: 1,
+          },
+          version: 1,
+        }),
+      );
+    });
+    await page.reload();
+    await expect(page.getByRole('button', { name: /Now playing: Seed 45/ })).toBeVisible();
+    await page.getByRole('button', { name: /Now playing: Seed 45/ }).click();
+    await page.waitForTimeout(900);
+
+    const queue = page.getByTestId('player-sheet').getByRole('button', { name: 'Open queue' });
+    const list = page.getByTestId('queue-list');
+    await queue.click();
+    await expect(list).toBeVisible();
+    await page.waitForTimeout(700);
+
+    await list.evaluate((node) => {
+      node.scrollTop = 600;
+    });
+    await page.waitForTimeout(700);
+    const offset = await list.evaluate((node) => node.scrollTop);
+    expect(offset).toBeGreaterThan(500);
   });
 });

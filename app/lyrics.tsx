@@ -8,7 +8,7 @@ import {
   SkipForward,
 } from '@/ui/icons';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -43,6 +43,17 @@ export default function LyricsScreen() {
   const previous = usePlayerStore((state) => state.previous);
   const lyrics = useLyrics();
   const [headerHeight, setHeaderHeight] = useState(0);
+
+  // This route can be pushed from the player after its dialog has parked.
+  // Move keyboard focus into the new screen instead of leaving it on the
+  // mini-player or the player close button.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const timer = window.setTimeout(() => {
+      document.querySelector<HTMLElement>('[aria-label="Close lyrics"]')?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const landscapeLeft = track ? (
     <View style={styles.landscapeLeft}>
       <Artwork
@@ -159,6 +170,7 @@ function LyricsBody({
   landscape: boolean;
   topOffset: number;
 }) {
+  const theme = useTheme();
   const insets = useSafeAreaInsets();
   const position = usePlayerStore((state) => state.position);
   const seek = usePlayerStore((state) => state.seek);
@@ -190,6 +202,10 @@ function LyricsBody({
     [seek],
   );
 
+  const setLineHeight = useCallback((index: number, height: number) => {
+    heights.current[index] = height;
+  }, []);
+
   useEffect(() => {
     if (!following || active < 0 || viewportHeight <= 0) return;
     const height = heights.current[active];
@@ -202,8 +218,16 @@ function LyricsBody({
     // screen (scroll viewport minus the header/meta offset) rather than from
     // the scroll area alone.
     const target = Math.max(0, offset + height / 2);
-    scrollRef.current?.scrollTo({ y: target, animated: true });
-  }, [active, contentVersion, following, paddingBottom, paddingTop, viewportHeight]);
+    scrollRef.current?.scrollTo({ y: target, animated: !theme.reduceMotion });
+  }, [
+    active,
+    contentVersion,
+    following,
+    paddingBottom,
+    paddingTop,
+    theme.reduceMotion,
+    viewportHeight,
+  ]);
 
   return (
     <>
@@ -242,30 +266,56 @@ function LyricsBody({
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {data.lines.map((line, index) => {
-          const isActive = index === active;
-          const canSeek = typeof line.start === 'number';
-          return (
-            <View
-              key={`${index}-${line.start ?? 'plain'}`}
-              onLayout={(event) => {
-                heights.current[index] = event.nativeEvent.layout.height;
-              }}
-            >
-              <LyricVerse
-                value={line.value}
-                isActive={isActive}
-                canSeek={canSeek}
-                start={line.start}
-                onSeek={seekToLine}
-              />
-            </View>
-          );
-        })}
+        {data.lines.map((line, index) => (
+          <LyricLine
+            key={`${index}-${line.start ?? 'plain'}`}
+            index={index}
+            value={line.value}
+            isActive={index === active}
+            canSeek={typeof line.start === 'number'}
+            start={line.start}
+            onSeek={seekToLine}
+            onHeight={setLineHeight}
+          />
+        ))}
       </ScrollView>
     </>
   );
 }
+
+const LyricLine = memo(function LyricLine({
+  index,
+  value,
+  isActive,
+  canSeek,
+  start,
+  onSeek,
+  onHeight,
+}: {
+  index: number;
+  value: string;
+  isActive: boolean;
+  canSeek: boolean;
+  start?: number;
+  onSeek: (start: number) => void;
+  onHeight: (index: number, height: number) => void;
+}) {
+  return (
+    <View
+      onLayout={(event) => {
+        onHeight(index, event.nativeEvent.layout.height);
+      }}
+    >
+      <LyricVerse
+        value={value}
+        isActive={isActive}
+        canSeek={canSeek}
+        start={start}
+        onSeek={onSeek}
+      />
+    </View>
+  );
+});
 
 const LyricVerse = memo(function LyricVerse({
   value,
@@ -281,36 +331,50 @@ const LyricVerse = memo(function LyricVerse({
   onSeek: (start: number) => void;
 }) {
   const theme = useTheme();
+  const reduceMotion = theme.reduceMotion;
   const presence = useSharedValue(isActive ? 1 : 0);
 
   useEffect(() => {
-    presence.set(withTiming(isActive ? 1 : 0, { duration: 300 }));
-  }, [isActive, presence]);
+    presence.set(
+      reduceMotion
+        ? isActive
+          ? 1
+          : 0
+        : withTiming(isActive ? 1 : 0, { duration: 300 }),
+    );
+  }, [isActive, presence, reduceMotion]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: 0.68 + presence.get() * 0.32,
     transform: [{ scale: 0.97 + presence.get() * 0.08 }],
   }));
 
+  const text = (
+    <Text
+      variant="body"
+      tone={isActive ? 'accent' : 'secondary'}
+      style={[styles.line, isActive && { color: theme.colors.accent }]}
+    >
+      {value}
+    </Text>
+  );
+
   return (
     <Animated.View style={animatedStyle}>
-      <PressableScale
-        haptic={false}
-        disabled={!canSeek}
-        accessibilityRole={canSeek ? 'button' : undefined}
-        accessibilityLabel={canSeek ? `Seek to ${value}` : value}
-        onPress={() => {
-          if (start !== undefined) onSeek(start);
-        }}
-      >
-        <Text
-          variant="body"
-          tone={isActive ? 'accent' : 'secondary'}
-          style={[styles.line, isActive && { color: theme.colors.accent }]}
+      {canSeek ? (
+        <PressableScale
+          haptic={false}
+          accessibilityRole="button"
+          accessibilityLabel={`Seek to ${value}`}
+          onPress={() => {
+            if (start !== undefined) onSeek(start);
+          }}
         >
-          {value}
-        </Text>
-      </PressableScale>
+          {text}
+        </PressableScale>
+      ) : (
+        text
+      )}
     </Animated.View>
   );
 });

@@ -20,6 +20,7 @@ import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 
 function AppStack() {
   const theme = useTheme();
+  const modalAnimation = theme.reduceMotion ? 'none' : 'slide_from_bottom';
   return (
     <>
       <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />
@@ -27,28 +28,16 @@ function AppStack() {
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: theme.colors.background },
-          animation: 'fade',
+          animation: theme.reduceMotion ? 'none' : 'fade',
         }}
       >
         <Stack.Screen name="index" options={{ animation: 'none' }} />
-        <Stack.Screen name="login" options={{ animation: 'fade' }} />
+        <Stack.Screen name="login" options={{ animation: theme.reduceMotion ? 'none' : 'fade' }} />
         <Stack.Screen name="(main)" options={{ animation: 'none' }} />
-        <Stack.Screen
-          name="player"
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen
-          name="queue"
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen
-          name="devices"
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen
-          name="lyrics"
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-        />
+        <Stack.Screen name="player" options={{ presentation: 'modal', animation: modalAnimation }} />
+        <Stack.Screen name="queue" options={{ presentation: 'modal', animation: modalAnimation }} />
+        <Stack.Screen name="devices" options={{ presentation: 'modal', animation: modalAnimation }} />
+        <Stack.Screen name="lyrics" options={{ presentation: 'modal', animation: modalAnimation }} />
       </Stack>
     </>
   );
