@@ -189,6 +189,19 @@ Library profiler after the pass (same Chromium setup):
 \* heap without a forced GC is noisy; read it as an order of magnitude. First
 grid is flat from 1.2k to 10k.
 
+## Performance mode
+
+Settings → Appearance → Performance mode has Auto/On/Off. Auto resolves once to
+`Device.totalMemory <= 2 GiB` on native; the web adapter always reports no
+low-memory signal so `expo-device`/`ua-parser-js` stays out of the web bundle.
+
+When effective, it forces reduced motion, removes the player backdrop image and
+blur, drops the bottom-tab blur, requests covers at 1x instead of 2x, skips the
+parked player's large cover and progress subscription, and stops palette
+extraction while browsing. The normal path is unchanged when Off. Off/Auto-off
+also keeps `palettePlayerOpen` constant, so opening or closing the player does
+not rebuild the theme context or re-arm the palette grace timer.
+
 ## Follow-ups
 
 - Profile a real Navidrome with 1000+ albums; the user treats this as working

@@ -54,9 +54,12 @@ tablet or a desktop browser.
 - Original FLAC and server-side transcoding to Opus or MP3.
 - Play, pause, seek, previous/next, volume, repeat and shuffle.
 - A persistent queue with drag reorder (Alt+↑/↓ keyboard fallback on web).
-- The queue opens on the playing track and is aligned before the panel appears.
+- The queue pre-mounts off-screen, opens on the playing track and stays aligned
+  while scrolling.
 - Trashing a track removes it from the native queue in place, without restarting
-  playback.
+  playback; Up Next and repeat mode are mirrored onto the native queue.
+- Performance mode (Auto/On/Off) for low-memory devices: no blur, reduced
+  motion, 1x covers and no parked-player artwork work.
 - Background playback and lock-screen/media controls on Android.
 - Media Session and keyboard transport on the web.
 - Lyrics: OpenSubsonic structured lyrics, LRC fallback and synced auto-scroll.
@@ -64,6 +67,12 @@ tablet or a desktop browser.
 ### Library
 
 - Albums, artists, playlists, genres and favourites.
+- Artist shuffle starts with top songs and appends the rest of the discography
+  in the background.
+- Favourites is virtualised and shows downloaded starred tracks while the
+  server response refreshes.
+- Settings sections collapse with a one-line summary and remain reachable by
+  keyboard and screen readers.
 - Server-wide search plus local accent folding, pinyin and initials.
 - Pinned albums, playlists and favourites on Home.
 - Recently played, recently added and downloaded-only views.
@@ -204,10 +213,11 @@ npm run typecheck
 npm run lint
 npm run test          # Vitest
 npm run test:e2e      # Playwright: desktop + mobile + one Firefox seek check
+npm run test:e2e:smoke # 11-check desktop smoke tier
 npm run test:e2e:all  # full desktop × mobile matrix
 ```
 
-Current baseline: **154 unit tests**, **66 default E2E checks**. See
+Current baseline: **235 unit tests**, **90 default E2E checks**. See
 [`docs/testing.md`](docs/testing.md) for coverage, codec/browser matrices and
 device status. The mock server is a development fixture and never holds real
 credentials.

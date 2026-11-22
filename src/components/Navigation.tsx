@@ -141,7 +141,7 @@ export function Rail() {
 export function BottomTabs() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const reduceBlur = useSettingsStore((state) => state.reduceBlur);
+  const reduceBlur = theme.reduceBlur;
   const chromeRadius = useSettingsStore((state) => state.chromeRadius);
   const tabsStyle = [
     styles.tabs,

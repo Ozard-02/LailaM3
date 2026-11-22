@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -8,6 +8,8 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import { resolvePerformanceMode } from '@/core/device-tier';
+import { isLowMemoryRuntime } from '@/services/device';
 import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import { motion } from '@/theme/tokens';
@@ -55,6 +57,12 @@ function BackdropLayer({
 
   const fade = useAnimatedStyle(() => ({ opacity: opacity.get() }));
   const headers = useAuthStore((state) => state.server?.headers);
+  // A stable source reference keeps expo-image from re-fetching the 900 px
+  // backdrop on every unrelated render.
+  const source = useMemo(() => {
+    if (!layer.uri) return undefined;
+    return headers ? { uri: layer.uri, headers } : layer.uri;
+  }, [headers, layer.uri]);
 
   return (
     <Animated.View
@@ -63,12 +71,13 @@ function BackdropLayer({
       style={[StyleSheet.absoluteFill, fade]}
     >
       <View style={[StyleSheet.absoluteFill, { backgroundColor: layer.color }]} />
-      {layer.uri && !reduceBlur ? (
+      {source && !reduceBlur ? (
         <Image
-          source={{ uri: layer.uri, headers }}
+          source={source}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
           blurRadius={70}
+          cachePolicy="memory-disk"
         />
       ) : null}
       <LinearGradient
@@ -91,9 +100,14 @@ export function PlayerBackdrop({
   visible = true,
   reduceMotion,
 }: PlayerBackdropProps) {
+  // Narrow selectors: the backdrop must not re-render on every palette change
+  // while the player is parked. It only cares whether blur is enabled.
+  const reduceBlurSetting = useSettingsStore((state) => state.reduceBlur);
+  const performanceSetting = useSettingsStore((state) => state.performanceMode);
+  const reduceBlur =
+    reduceBlurSetting || resolvePerformanceMode(performanceSetting, isLowMemoryRuntime());
   const [layers, setLayers] = useState<Layer[]>([]);
   const nextId = useRef(0);
-  const reduceBlur = useSettingsStore((state) => state.reduceBlur);
 
   useEffect(() => {
     if (!ready || !visible) return;
@@ -112,9 +126,14 @@ export function PlayerBackdrop({
     return () => clearTimeout(timer);
   }, [layers]);
 
+  // The sheet is parked while the player is closed: render only the current
+  // scene so outgoing 900 px blurred bitmaps are not retained. The fade timer
+  // above prunes the state shortly after as well.
+  const scenes = visible ? layers : layers.slice(-1);
+
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {layers.map((layer, index) => (
+      {scenes.map((layer, index) => (
         <BackdropLayer
           key={layer.id}
           layer={layer}

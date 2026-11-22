@@ -20,7 +20,10 @@ import {
   typography,
   type Colors,
 } from './tokens';
+import { resolvePerformanceMode } from '@/core/device-tier';
+import { isLowMemoryRuntime } from '@/services/device';
 import { useSettingsStore } from '@/stores/settings';
+import { useUIStore } from '@/stores/ui';
 import { extractPaletteFromUrl } from './extract';
 import { accentPair, neutralPalette, type ArtworkPalette } from './palette';
 
@@ -38,6 +41,17 @@ export interface Theme {
   typography: typeof typography;
   motion: typeof motion;
   reduceMotion: boolean;
+  /** True when blur is disabled by the setting or by performance mode. */
+  reduceBlur: boolean;
+  /** Effective performance mode (Auto resolved against this device). */
+  performanceMode: boolean;
+  /** True when this device is at or below the low-memory threshold. */
+  lowMemoryDevice: boolean;
+  /**
+   * Whether the artwork palette should follow the player. Always true outside
+   * performance mode, so player open/close does not rebuild the theme.
+   */
+  palettePlayerOpen: boolean;
   setArtworkFromUrl: (url: string | undefined) => void;
   resetArtwork: () => void;
 }
@@ -91,10 +105,23 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const [artworkUrl, setArtworkUrl] = useState<string | undefined>(undefined);
   const [isArtwork, setIsArtwork] = useState(false);
   const customAccent = useSettingsStore((state) => state.accentColor);
+  const performanceSetting = useSettingsStore((state) => state.performanceMode);
+  const reduceBlurSetting = useSettingsStore((state) => state.reduceBlur);
+  const playerOpen = useUIStore((state) => state.playerOpen);
+  const lowMemoryDevice = isLowMemoryRuntime();
+  const performanceMode = resolvePerformanceMode(performanceSetting, lowMemoryDevice);
+  // Only performance mode ties palette work to the player. Outside it this is
+  // a constant, so opening or closing the player never rebuilds the theme or
+  // re-arms palette grace timers.
+  const palettePlayerOpen = performanceMode ? playerOpen : true;
   const activeUrl = useRef<string | undefined>(undefined);
 
   const setArtworkFromUrl = useCallback(
     (url: string | undefined) => {
+      // Performance mode keeps the palette for the open player only. Ignoring
+      // browsing screens and track changes while parked avoids decoding and
+      // extracting a cover the user is not looking at.
+      if (!palettePlayerOpen) return;
       activeUrl.current = url;
       if (!url) {
         setArtwork(neutralPalette);
@@ -123,7 +150,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
         });
       });
     },
-    [],
+    [palettePlayerOpen],
   );
 
   const resetArtwork = useCallback(() => {
@@ -135,7 +162,9 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   const value = useMemo<Theme>(() => {
     const base = mode === 'light' ? lightColors : darkColors;
-    const useArtwork = mode === 'dark' && isArtwork;
+    // In performance mode the palette follows the open player only; when it is
+    // parked the app keeps the neutral theme instead of tinting every screen.
+    const useArtwork = mode === 'dark' && isArtwork && palettePlayerOpen;
     let colors: Colors = useArtwork
       ? {
           ...base,
@@ -171,7 +200,11 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       radius,
       typography,
       motion,
-      reduceMotion,
+      reduceMotion: reduceMotion || performanceMode,
+      reduceBlur: reduceBlurSetting || performanceMode,
+      performanceMode,
+      lowMemoryDevice,
+      palettePlayerOpen,
       setArtworkFromUrl,
       resetArtwork,
     };
@@ -182,6 +215,10 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     artworkUrl,
     customAccent,
     reduceMotion,
+    reduceBlurSetting,
+    performanceMode,
+    lowMemoryDevice,
+    palettePlayerOpen,
     setArtworkFromUrl,
     resetArtwork,
   ]);

@@ -13,11 +13,16 @@ live in [`docs/testing.md`](docs/testing.md).
   updates are batched, persisted writes are coalesced, search indices are folded
   once per data change, library search and Downloads are virtualised, and a local
   download budget is available.
-- Queue behaviour is refined: the queue opens on the playing track before the
-  panel appears, and trashed tracks are removed from the native queue without
-  restarting playback.
+- Queue behaviour is refined: the panel pre-mounts and aligns off-screen, row
+  actions resolve from the live queue, and trashed tracks are removed from the
+  native queue without restarting playback.
+- Performance mode (Auto/On/Off) is available for low-memory devices: no blur,
+  reduced motion, 1x covers and no parked-player artwork work.
+- Library work landed: artist shuffle, virtualised Favourites and collapsible
+  settings sections.
 - The Android engine is a local Media3 module. It replaces the previous RNTP
-  baseline and removes the non-commercial license blocker.
+  baseline and removes the non-commercial license blocker. Up Next and repeat
+  mode are mirrored onto the native queue without reloading the active item.
 - The Media3 device matrix is still pending: notification, lock screen,
   Bluetooth, audio focus, gapless and codecs must be re-validated on hardware.
 
@@ -34,12 +39,18 @@ live in [`docs/testing.md`](docs/testing.md).
 - Queue trash with undo, shuffle/radio exclusions and per-server playlists.
 - Trashing removes the item from the native queue without reloading the current
   track.
-- The queue opens on the playing track and aligns before the panel is visible.
+- The queue pre-mounts off-screen, opens on the playing track and stays aligned
+  while scrolling; row actions use the live queue.
+- Native queue sync mirrors Up Next and repeat mode without reloading the active
+  track; auto-advance carries media id, index and reason.
 - Radio top-up, up-next and queue reordering.
 
 ### Library
 
 - Albums, artists, playlists, genres and favourites.
+- Artist shuffle from top songs with a background discography append.
+- Virtualised Favourites with an offline-first fallback.
+- Collapsible settings sections with summaries.
 - Server-wide search plus local accent folding, pinyin and initials.
 - Pinned albums, playlists and favourites on Home.
 - Recently played, recently added and downloaded-only views.
@@ -102,11 +113,14 @@ live in [`docs/testing.md`](docs/testing.md).
 
 ## Test baseline
 
-- 154 unit tests in 27 files.
-- 66 default E2E checks across Chromium desktop, the mobile viewport and one
-  Firefox seek check.
-- Typecheck, lint and the production web export pass.
-- Android release builds; device install and the Media3 matrix are pending.
+- 235 unit tests in 33 files.
+- 90 default E2E checks across Chromium desktop, the mobile viewport and one
+  Firefox seek check, plus an 11-check desktop `@smoke` tier.
+- Typecheck, lint, unit tests, the production web export and the full default E2E
+  suite pass.
+- The Media3 Kotlin module compiles. Hardware validation of the new native queue
+  sync, repeat mode, auto-advance transition and notification controls is still
+  pending.
 
 See [`docs/testing.md`](docs/testing.md) for commands, coverage and the codec
 matrix.

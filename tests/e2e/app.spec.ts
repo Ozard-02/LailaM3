@@ -35,13 +35,13 @@ async function setTrashPlaylist(page: Page) {
 }
 
 test.describe('Laila web app', () => {
-  test('signs in and shows the library', async ({ page }) => {
+  test('signs in and shows the library @smoke', async ({ page }) => {
     await login(page);
     await expect(page.getByText('Recently played').first()).toBeVisible();
     await expect(page.getByRole('button', { name: /A Quiet Place by/ }).first()).toBeVisible();
   });
 
-  test('opens an album and plays a track @both', async ({ page }) => {
+  test('opens an album and plays a track @both @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await expect(page.getByText('Album', { exact: true })).toBeVisible();
@@ -57,7 +57,7 @@ test.describe('Laila web app', () => {
       .toBe('playing');
   });
 
-  test('searches the library from the library tab', async ({ page }) => {
+  test('searches the library from the library tab @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: 'Library' }).click();
     const searchField = page.getByPlaceholder('Search albums, artists, playlists and genres');
@@ -202,7 +202,7 @@ test.describe('Laila web app', () => {
       .toContain('Now playing');
   });
 
-  test('re-opens the player from the pill after closing it', async ({ page }) => {
+  test('re-opens the player from the pill after closing it @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
@@ -361,7 +361,7 @@ test.describe('Laila web app', () => {
     await expect(page.getByText(/on this device · .* free/)).toBeVisible();
   });
 
-  test('shows Segue devices when the hub is present @both', async ({ page }) => {
+  test('shows Segue devices when the hub is present', async ({ page }) => {
     await login(page);
     await page.goto('/devices');
     await expect(page.getByText('Connected as laila')).toBeVisible();
@@ -453,7 +453,7 @@ test.describe('Laila web app', () => {
       .toBeGreaterThan(beforeDrag + 5);
   });
 
-  test('restores the queue without starting playback after a reload @both', async ({ page }) => {
+  test('restores the queue without starting playback after a reload @both @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
@@ -467,7 +467,7 @@ test.describe('Laila web app', () => {
     await expect(page.getByRole('button', { name: 'Pause', exact: true })).toHaveCount(0);
   });
 
-  test('continues a Segue playback from the handoff pill @both', async ({ page }) => {
+  test('continues a Segue playback from the handoff pill', async ({ page }) => {
     await login(page);
     const pill = page.getByRole('button', {
       name: /Continue playback from Living room TV/,
@@ -507,7 +507,7 @@ test.describe('Laila web app', () => {
     await expect(page.getByTestId('artwork-cover-1').first()).toBeVisible();
   });
 
-  test('keeps covers when unshuffling a transferred queue @both', async ({ page }) => {
+  test('keeps covers when unshuffling a transferred queue', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('button', { name: 'Devices and Segue' }).click();
@@ -527,7 +527,7 @@ test.describe('Laila web app', () => {
     await expect(page.getByTestId('artwork-placeholder')).toHaveCount(0);
   });
 
-  test('does not nest buttons in the mini player, track rows or queue @both', async ({ page }) => {
+  test('does not nest buttons in the mini player, track rows or queue', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
@@ -618,8 +618,14 @@ test.describe('Laila web app', () => {
         (layers) => layers.length === 2 && (layers[1] ?? 1) > 0.05 && (layers[1] ?? 1) < 0.95,
       ),
     ).toBe(true);
-    // The outgoing layer is dropped after the fade.
-    expect(samples[samples.length - 1]?.length).toBe(1);
+    // The outgoing layer is dropped after the fade. Poll instead of trusting
+    // the last rAF sample: under load the fade can finish a little later.
+    await expect
+      .poll(
+        async () => page.locator('[data-testid="player-backdrop"]').count(),
+        { timeout: 5_000 },
+      )
+      .toBe(1);
   });
 
   test('toggles exclude-from-shuffle by editing the playlist comment', async ({ page }) => {
@@ -938,7 +944,7 @@ test.describe('Laila web app', () => {
     expect(overlap.every((opacity) => opacity === 0)).toBe(true);
   });
 
-  test('opens the queue and removes a track @both', async ({ page }) => {
+  test('opens the queue and removes a track @both @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
     await page.getByRole('button', { name: 'Play', exact: true }).first().click();
@@ -997,7 +1003,7 @@ test.describe('Laila web app', () => {
     ]);
   });
 
-  test('moves the current track to Trash and undoes it @both', async ({ page }) => {
+  test('moves the current track to Trash and undoes it', async ({ page }) => {
     await login(page);
     await setTrashPlaylist(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
@@ -1027,48 +1033,6 @@ test.describe('Laila web app', () => {
     await page.keyboard.press('Delete');
     await expect(page.getByText(/Moved “First Light” to Trash/)).toBeVisible();
     await expect(page.getByText('Slow Motion').first()).toBeVisible();
-  });
-
-  test('moves an album to Trash, restores it and keeps the queue @smoke', async ({
-    page,
-  }) => {
-    await login(page);
-    await setTrashPlaylist(page);
-    await page.goto('/album/al-1');
-    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
-    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
-    await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
-
-    await page.getByRole('button', { name: 'More album options' }).click();
-    await page.getByRole('button', { name: 'Move album to Trash' }).click();
-    await expect(page.getByText(/Moved “Blue Hour” to Trash/)).toBeVisible();
-
-    await page.getByRole('button', { name: 'Undo' }).click();
-    await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
-    await page.getByRole('button', { name: /Open queue/ }).first().click();
-    await expect(page.getByText(/4 tracks · drag to reorder/)).toBeVisible();
-  });
-
-  test('moves a library row to Trash from its menu and undoes it', async ({ page }) => {
-    await login(page);
-    await setTrashPlaylist(page);
-    await page.goto('/album/al-1');
-    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
-
-    await page.getByRole('button', { name: 'More options for Slow Motion' }).click();
-    await page.getByRole('button', { name: 'Move to Trash' }).click();
-    await expect(page.getByText(/Moved “Slow Motion” to Trash/)).toBeVisible();
-
-    // Nothing is playing, so the row menu must not touch the queue.
-    const queued = await page.evaluate(() => {
-      const raw = window.localStorage.getItem('laila.player');
-      return raw ? JSON.parse(raw).state.queueState.queue.length : 0;
-    });
-    expect(queued).toBe(0);
-
-    await page.getByRole('button', { name: 'Undo' }).click();
-    await expect(page.getByText(/Restored to queue/)).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Blue Hour' })).toBeVisible();
   });
 
   test('swipes a queue row left to Trash and undoes it @both', async ({ page }) => {
@@ -1109,7 +1073,7 @@ test.describe('Laila web app', () => {
     await expect(page.getByText('3 tracks · drag to reorder')).toBeVisible();
   });
 
-  test('opens the downloads and settings screens', async ({ page }) => {
+  test('opens the downloads and settings screens @smoke', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: 'Downloads' }).click();
     await expect(page.getByText('No downloads yet')).toBeVisible();

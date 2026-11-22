@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Music2 } from '@/ui/icons';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { buildCoverUrl } from '@/core/subsonic/params';
@@ -7,6 +7,7 @@ import { coverUri } from '@/core/offline';
 import { useAuthStore } from '@/stores/auth';
 import { useOfflineStore } from '@/stores/offline';
 import { useTheme } from '@/theme/ThemeProvider';
+import { coverRequestSize } from './artwork-size';
 
 export interface ArtworkProps {
   coverArt?: string;
@@ -28,10 +29,18 @@ export const Artwork = memo(function Artwork({
   const theme = useTheme();
   const server = useAuthStore((state) => state.server);
   const localCover = useOfflineStore((state) => coverUri(state.index, coverArt));
+  const requestSize = coverRequestSize(size, theme.performanceMode);
   const uri =
     localCover ??
-    (coverArt && server ? buildCoverUrl(server, coverArt, Math.round(size * 2)) : undefined);
+    (coverArt && server ? buildCoverUrl(server, coverArt, requestSize) : undefined);
   const borderRadius = radius ?? theme.radius.artwork;
+  const headers = server?.headers;
+  // expo-image keys its header-aware load on the source reference. A fresh
+  // object every render made web re-fetch and re-blob every cover.
+  const source = useMemo(
+    () => (uri ? (localCover ? { uri: localCover } : { uri, headers }) : undefined),
+    [headers, localCover, uri],
+  );
 
   return (
     <View
@@ -44,11 +53,7 @@ export const Artwork = memo(function Artwork({
     >
       {uri ? (
         <Image
-          source={
-            localCover
-              ? { uri: localCover }
-              : { uri: uri as string, headers: server?.headers }
-          }
+          source={source}
           style={styles.image}
           contentFit="cover"
           transition={theme.reduceMotion ? 0 : 180}

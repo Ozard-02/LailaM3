@@ -3,6 +3,92 @@
 Dated implementation history. Current status and priorities live in
 `ROADMAP.md`; test commands and matrices live in `docs/testing.md`.
 
+## 2026-11-22
+
+Public release updated with the non-plugin upstream work of 2026-11-13…22.
+
+### Performance mode
+
+- New Auto/On/Off setting in Settings → Appearance. Auto enables on devices with
+  2 GB of RAM or less; manual override always available. Off leaves the existing
+  code path unchanged.
+- Effective `reduceMotion` follows performance mode: instant player, queue and
+  sheet transitions; no press scale, marquee, skeleton shimmer or image
+  transitions; no swipe springs.
+- No backdrop image or blur in performance mode; no `BlurView` in the bottom
+  tabs; covers requested at 1x instead of 2x.
+- The maximized player's large cover and progress subscription are skipped while
+  parked; the morph overlay keeps its cover. Neighbour-cover prefetch is skipped
+  while parked.
+- Global per-track palette re-theming is skipped while browsing; the open player
+  keeps the track palette. The palette is parked with the player on close.
+- `expo-image` memory cache is cleared on background in performance mode.
+- `expo-device` is used for `Device.totalMemory` on native. The web adapter
+  returns no low-memory signal, so `ua-parser-js` stays out of the web bundle.
+- Off/Auto-off no longer rebuilds the theme context when the player opens or
+  closes; only an effective performance mode tracks that state. `PlayerBackdrop`
+  uses narrow settings/device-tier selectors instead of the full theme, so a
+  parked player does not re-render on every palette change. A track without a
+  cover resets the palette instead of keeping the previous one.
+
+### Queue, motion and keyboard
+
+- Web Escape closes exactly one surface: the queue sheet first, then the player.
+  A child modal (Add to playlist) owns Escape while open. Lyrics opens over the
+  still-open player, and closing lyrics returns to it.
+- Queue row actions resolve their index from the live queue when the swipe,
+  remove, jump or trash runs, so a second action cannot hit a row that inherited
+  a stale `DraggableFlatList` index.
+- The queue pre-mounts off-screen after the player morph settles and aligns while
+  hidden; the first open is only the sheet spring. Row pitch is measured from the
+  first laid-out row (60 dp fallback), so deep indices and the last track land at
+  the top. Scrolling the open queue no longer snaps back.
+- Reduced motion is observed live: the player morph, queue sheet release, swipe
+  return, row lift, lyric verse, route transitions and artwork fades snap when it
+  is enabled.
+- Cover-swipe boundaries, split-layout clipping, slow-swipe press guards, web
+  progress scrubbing (one seek on release) and mini-player first/last-track
+  bounds were aligned with the player behaviour.
+
+### Library
+
+- Settings sections are collapsible with an accessible header and a one-line
+  summary. Account, Playback, Downloads, Appearance, Gestures & queue and About
+  are all open by default; Reduce blur moved to Appearance.
+- Artist pages gain **Shuffle**: top songs start immediately, then the rest of
+  the discography is appended in the background if the queue has not changed.
+  Offline shuffle uses downloaded tracks for that artist.
+- Favourites renders a virtualised track list, shows downloaded starred tracks
+  while `getStarred2` refreshes, and holds the starred query for five minutes
+  (favourite mutations still invalidate it).
+
+### Reliability and Media3
+
+- Duration falls back to track metadata for transcodes that report
+  `Infinity`/`NaN`/`C.TIME_UNSET`; web seeks clamp to the hinted duration.
+- Subsonic retries are abort-aware, and stream URLs ask for
+  `estimateContentLength` so browsers receive a finite duration.
+- Offline downloads guard against cancel/remove/clear races, prune completed
+  entries from the session journal, and read manifests in bounded batches.
+- DLNA SOAP requests have an abort timeout; scrobbles are server-qualified;
+  clearing or ending playback resets the last-play record.
+- Shuffled reorders keep the unshuffled original order for Unshuffle.
+- Favourites and Home subscribe to offline-index slices instead of the whole
+  index; cards, artwork, lyrics and the toast host avoid needless renders.
+- The Media3 module gains `syncQueue`, `skipToIndex`, `setRepeatMode` and
+  auto-advance metadata (media id, index, reason). The adapter mirrors Up Next
+  and repeat mode onto the native queue without reloading the active item, and
+  pauses only when the store takes over.
+
+### Tests and docs
+
+- 235 unit tests in 33 files; 90 default E2E checks (77 Chromium desktop, 12
+  mobile, 1 Firefox) and an 11-check desktop `@smoke` tier.
+- The Media3 Kotlin module compiles; the new native queue sync still needs a
+  hardware pass.
+- `docs/motion.md` now describes the shipped springs, thresholds and live
+  reduce-motion behaviour.
+
 ## 2026-11-16
 
 - Track rows in albums, playlists, favourites, Library search and Search open a

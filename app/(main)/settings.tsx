@@ -31,6 +31,7 @@ import {
   type SwipeAction,
 } from '@/stores/settings';
 import type { ChromeRadius } from '@/theme/tokens';
+import type { PerformanceModeSetting } from '@/core/device-tier';
 import { serverKey } from '@/core/queryKeys';
 import { Input } from '@/ui/Input';
 import { Pill } from '@/ui/Pill';
@@ -52,6 +53,12 @@ const CHROME_SHAPES: { value: ChromeRadius; label: string }[] = [
   { value: 'pill', label: 'Pill' },
   { value: 'rounded', label: 'Rounded' },
   { value: 'soft', label: 'Soft' },
+];
+
+const PERFORMANCE_MODES: { value: PerformanceModeSetting; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' },
 ];
 
 const GB = 1024 ** 3;
@@ -202,6 +209,8 @@ export default function SettingsScreen() {
   const toggleCodecBadge = useSettingsStore((state) => state.toggleCodecBadge);
   const reduceBlur = useSettingsStore((state) => state.reduceBlur);
   const toggleReduceBlur = useSettingsStore((state) => state.toggleReduceBlur);
+  const performanceModeSetting = useSettingsStore((state) => state.performanceMode);
+  const setPerformanceMode = useSettingsStore((state) => state.setPerformanceMode);
   const hubUrl = useSettingsStore((state) => state.hubUrl);
   const setHubUrl = useSettingsStore((state) => state.setHubUrl);
   const [hubInput, setHubInput] = useState(hubUrl);
@@ -249,7 +258,9 @@ export default function SettingsScreen() {
     : 'Not connected';
   const playbackSummary = `${qualityLabel} · radio ${continueWithRadio ? 'on' : 'off'}`;
   const downloadsSummary = `${downloadQualityLabel} · ${parallelDownloads} parallel · ${offlineLimitLabel}`;
-  const appearanceSummary = `${shapeLabel} · ${accentLabel}`;
+  const appearanceSummary = `${shapeLabel} · ${accentLabel}${
+    theme.performanceMode ? ' · Performance' : ''
+  }`;
   const gesturesSummary = `${swipeLeftLabel} / ${swipeRightLabel}${
     trashPlaylistName ? ` · ${trashPlaylistName}` : ''
   }`;
@@ -525,13 +536,42 @@ export default function SettingsScreen() {
         </View>
       </Surface>
 
-      <Surface style={styles.card} bordered>
-        <Row
-          label="Reduce blur effects"
-          value={reduceBlur ? 'On' : 'Off'}
-          onPress={toggleReduceBlur}
-        />
+      <Surface testID="performance-mode" style={styles.card} bordered>
+        <Text variant="headline">Performance mode</Text>
+        <Text variant="caption" tone="secondary">
+          Cuts blur, motion and high-resolution artwork on very weak devices. Auto turns
+          it on when the device has 2 GB of RAM or less.
+        </Text>
+        <View style={styles.swipeOptions}>
+          {PERFORMANCE_MODES.map((item) => (
+            <Pill
+              key={item.value}
+              label={item.label}
+              selected={performanceModeSetting === item.value}
+              onPress={() => setPerformanceMode(item.value)}
+            />
+          ))}
+        </View>
+        <Text variant="caption" tone="tertiary">
+          {performanceModeSetting === 'auto'
+            ? theme.performanceMode
+              ? 'Auto: on — this device has 2 GB of RAM or less.'
+              : 'Auto: off — this device does not need it.'
+            : theme.performanceMode
+              ? 'On — reduced visuals and no backdrop blur.'
+              : 'Off — the full visual experience.'}
+        </Text>
       </Surface>
+
+      {!theme.performanceMode ? (
+        <Surface style={styles.card} bordered>
+          <Row
+            label="Reduce blur effects"
+            value={reduceBlur ? 'On' : 'Off'}
+            onPress={toggleReduceBlur}
+          />
+        </Surface>
+      ) : null}
 
       <Surface style={styles.card} bordered>
         <Text variant="headline">Accent colour</Text>

@@ -11,24 +11,27 @@ npm run typecheck
 npm run lint
 npm test              # Vitest unit tests
 npm run test:e2e      # Playwright default matrix
+npm run test:e2e:smoke # 11-check desktop @smoke tier
 npm run test:e2e:all  # full desktop × mobile matrix
 npm run build:web     # production web export
 npm run profile:core  # large-input core benchmark (not part of `npm test`)
 ```
 
-## Current baseline — 2026-11-16
+## Current baseline — 2026-11-22
 
-- **162 unit tests** in 27 files.
-- **74 default E2E checks**: 56 Chromium desktop, 17 mobile checks and one
+- **235 unit tests** in 33 files.
+- **90 default E2E checks**: 77 Chromium desktop, 12 mobile checks and one
   Firefox seek check.
-- `FULL_E2E=1` was not re-measured after the queue/player pass.
+- **11 desktop `@smoke` checks** via `npm run test:e2e:smoke`.
+- `FULL_E2E=1` was not re-measured after the latest queue/player pass.
 - Typecheck and lint are clean; the web export builds.
-- Android release builds; the Media3 device matrix is pending. The new native
-  queue removal has not been smoke-tested on hardware yet.
-- The 2026-11-16 build adds the per-track ••• menu (long press or button) on
-  album, playlist, favourites and both search lists, Move to Trash in that
-  menu and in the album menu, and the swipe/press guard; desktop and mobile
-  E2E pass.
+- The Media3 Kotlin module compiles. Hardware validation of the new native
+  queue sync, repeat mode, auto-advance transition and notification controls is
+  still pending.
+- The 2026-11-22 build adds performance mode, collapsible settings, artist
+  shuffle, virtualised Favourites, queue pre-mount/alignment, live queue row
+  actions and the motion/keyboard polish pass. Desktop, mobile and Firefox E2E
+  pass.
 
 ## Unit coverage
 
@@ -37,7 +40,9 @@ retry/backoff and redaction, offline index/integrity/recovery/batch removal,
 precomputed search index, coalesced persist storage, server switching, Segue
 state/handoff, DLNA parsing, storage recovery/migration, query-key scoping,
 download-progress throttling, queue-trash snapshot/remove/restore, the
-player-store trash path, and the large-input `profile:core` harness targets.
+player-store trash path, duration fallback, device-tier resolution, artwork
+request sizing, offline download races, native Media3 queue sync, auto-advance
+decisions, and the large-input `profile:core` harness targets.
 
 ## E2E coverage
 
@@ -56,8 +61,17 @@ Playwright runs against the bundled mock server; it never holds real credentials
 - Media Session metadata and `playing` state are asserted after playback starts.
 - `queue-align.spec.ts` plays the last album track and asserts that opening and
   reopening the queue puts it at the top without a late scroll, that the row is
-  already aligned while the sheet is still rising, and that the closed sheet is
-  inert, on desktop and mobile.
+  already aligned while the sheet is still rising, that a deep track in a long
+  queue is aligned before opening, that scrolling does not snap back, and that
+  the closed sheet is inert, on desktop and mobile.
+- `motion.spec.ts` covers top-surface Escape, lyrics focus, clear-queue parking,
+  slow-swipe handling, cover-swipe clipping and bounds, queue quick-drop and
+  hold, live reduced motion and the animated control.
+- `performance.spec.ts` enables performance mode and verifies persistence, that
+  the blurred backdrop is absent, and that the open cover requests 1x instead of
+  2x; a normal-mode control proves the full-size path still runs.
+- `library-wishes.spec.ts` covers album trash/restore and artist shuffle, and
+  owns the album/library-row trash checks moved out of `app.spec.ts`.
 
 ## Codec matrix
 

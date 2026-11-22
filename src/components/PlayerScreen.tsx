@@ -94,6 +94,7 @@ export const PlayerScreen = memo(function PlayerScreen({
 }) {
   const theme = useTheme();
   const reduceMotion = theme.reduceMotion;
+  const performanceMode = theme.performanceMode;
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -131,20 +132,30 @@ export const PlayerScreen = memo(function PlayerScreen({
     track?.coverArt && server ? paletteCoverUrl(server, track.coverArt) : undefined;
   const paletteMatches = !track?.coverArt || theme.artworkUrl === paletteUrl;
   const paletteGraceOver = paletteGrace.over && paletteGrace.cover === track?.coverArt;
+  const palettePlayerOpen = theme.palettePlayerOpen;
   const setArtworkFromUrl = theme.setArtworkFromUrl;
+  const resetArtwork = theme.resetArtwork;
   useEffect(() => {
     // Another screen (album/artist) may own the palette while the player is
     // parked. Re-assert the playing track's palette when it opens.
-    if (!active || !paletteUrl) return;
+    if (!palettePlayerOpen || !paletteUrl) return;
     setArtworkFromUrl(paletteUrl);
-  }, [active, paletteUrl, setArtworkFromUrl]);
+  }, [palettePlayerOpen, paletteUrl, setArtworkFromUrl]);
   useEffect(() => {
+    // Performance mode only tints the open player. Park the palette with it so
+    // the next open never flashes the previous track's colours. Outside that
+    // mode the palette is global, so this never runs.
+    if (palettePlayerOpen) return;
+    resetArtwork();
+  }, [palettePlayerOpen, resetArtwork]);
+  useEffect(() => {
+    if (!palettePlayerOpen) return;
     const cover = track?.coverArt;
     if (!cover) return;
     // Safety net for a slow or failed extraction: never freeze the backdrop.
     const timer = setTimeout(() => setPaletteGrace({ cover, over: true }), 1200);
     return () => clearTimeout(timer);
-  }, [track?.coverArt]);
+  }, [palettePlayerOpen, track?.coverArt]);
 
   const ownQueueProgress = useSharedValue(0);
   const queueP = queueProgress ?? ownQueueProgress;
@@ -382,7 +393,12 @@ export const PlayerScreen = memo(function PlayerScreen({
   }
 
   const isPlaying = status === 'playing';
-  const coverUrl = track.coverArt && server ? buildCoverUrl(server, track.coverArt, 900) : undefined;
+  // The backdrop is only visible when the sheet is up; in performance mode it
+  // is not rendered at all, so the 900 px URL is not even built.
+  const coverUrl =
+    !performanceMode && track.coverArt && server
+      ? buildCoverUrl(server, track.coverArt, 900)
+      : undefined;
   const codec = [track.suffix?.toUpperCase(), track.bitRate ? `${track.bitRate} kbps` : null]
     .filter(Boolean)
     .join(' · ');
@@ -451,7 +467,7 @@ export const PlayerScreen = memo(function PlayerScreen({
 
   return (
     <View style={[styles.root, { backgroundColor: theme.colors.background }]}>
-      {!reducedEffects ? (
+      {!reducedEffects && (!performanceMode || active) ? (
         <PlayerBackdrop
           uri={coverUrl}
           color={theme.colors.background}
@@ -519,12 +535,19 @@ export const PlayerScreen = memo(function PlayerScreen({
                 focusable={!hideShared || queueOpen}
                 scaleTo={1}
               >
-                <Artwork
-                  key={track.coverArt ?? track.id}
-                  coverArt={track.coverArt}
-                  size={artSize}
-                  radius={hideShared ? 10 : wide ? 18 : 14}
-                />
+                {performanceMode && !active ? (
+                  // Parked: keep the measured box but do not decode a cover
+                  // that is fully hidden. The morph overlay owns the visible
+                  // artwork until the queue opens.
+                  <View style={{ width: artSize, height: artSize }} />
+                ) : (
+                  <Artwork
+                    key={track.coverArt ?? track.id}
+                    coverArt={track.coverArt}
+                    size={artSize}
+                    radius={hideShared ? 10 : wide ? 18 : 14}
+                  />
+                )}
               </PressableScale>
             </View>
           </Animated.View>
@@ -554,7 +577,9 @@ export const PlayerScreen = memo(function PlayerScreen({
           </View>
 
           <View style={styles.progressBlock}>
-            <PlaybackProgress label="Playback position" height={5} showThumb showTimes />
+            {performanceMode && !active ? null : (
+              <PlaybackProgress label="Playback position" height={5} showThumb showTimes />
+            )}
           </View>
 
           <View style={styles.controls}>

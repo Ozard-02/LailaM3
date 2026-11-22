@@ -7,6 +7,7 @@ import { buildCoverUrl } from '@/core/subsonic/params';
 import { useAuthStore } from '@/stores/auth';
 import { usePlayerStore } from '@/stores/player';
 import { useTheme } from '@/theme/ThemeProvider';
+import { coverRequestSize } from '@/ui/artwork-size';
 
 const RETURN_SPRING = { damping: 26, stiffness: 320, mass: 0.7, overshootClamping: true };
 const COMMIT_DISTANCE = 58;
@@ -45,6 +46,7 @@ export function useCoverSwipe({
 }) {
   const theme = useTheme();
   const reduceMotion = theme.reduceMotion;
+  const performanceMode = theme.performanceMode;
   const swipeX = useSharedValue(0);
   const ended = useSharedValue(false);
   // JS-only flag. Not a shared value: on native, a JS read of a shared value
@@ -124,19 +126,28 @@ export function useCoverSwipe({
 
   useEffect(() => {
     if (!server || !coverSize) return;
+    // A disabled swipe does not need decoded neighbours. Normal mode keeps
+    // prefetching while parked so the first swipe is instant.
+    if (performanceMode && !enabled) return;
     const urls = [
       selectCurrentTrack(queueReducer(queueState, { type: 'next' })),
       selectCurrentTrack(queueReducer(queueState, { type: 'previous' })),
     ]
       .filter((track) => track && track.id !== trackId && track.coverArt)
-      .map((track) => buildCoverUrl(server, track!.coverArt!, Math.round(coverSize * 2)));
+      .map((track) =>
+        buildCoverUrl(
+          server,
+          track!.coverArt!,
+          coverRequestSize(coverSize, performanceMode),
+        ),
+      );
     if (urls.length) {
       void Image.prefetch(urls, {
         cachePolicy: 'memory-disk',
         headers: server.headers,
       }).catch(() => undefined);
     }
-  }, [coverSize, queueState, server, trackId]);
+  }, [coverSize, enabled, performanceMode, queueState, server, trackId]);
 
   const gesture = useMemo(
     () =>

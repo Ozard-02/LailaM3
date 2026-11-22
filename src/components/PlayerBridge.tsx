@@ -46,13 +46,17 @@ export function PlayerBridge() {
     });
   }, []);
 
+  const palettePlayerOpen = theme.palettePlayerOpen;
+  const coverUrl =
+    track?.coverArt && server ? paletteCoverUrl(server, track.coverArt) : undefined;
+
   useEffect(() => {
-    if (track?.coverArt && server) {
-      setArtworkFromUrl(paletteCoverUrl(server, track.coverArt));
-    } else {
-      resetArtwork();
-    }
-  }, [track?.coverArt, server, setArtworkFromUrl, resetArtwork]);
+    // Outside performance mode this is always true; inside it only runs while
+    // the player is visible.
+    if (!palettePlayerOpen) return;
+    if (coverUrl) setArtworkFromUrl(coverUrl);
+    else resetArtwork();
+  }, [palettePlayerOpen, coverUrl, setArtworkFromUrl, resetArtwork]);
 
   return null;
 }

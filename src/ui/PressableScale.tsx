@@ -1,6 +1,7 @@
 import { useCallback, type PropsWithChildren } from 'react';
 import {
   Pressable,
+  View,
   type PressableProps,
   type StyleProp,
   type ViewStyle,
@@ -72,7 +73,11 @@ export function PressableScale({
       onPressOut={handleOut}
       onPress={handlePress}
     >
-      <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
+      {theme.reduceMotion ? (
+        <View style={style}>{children}</View>
+      ) : (
+        <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
+      )}
     </Pressable>
   );
 }

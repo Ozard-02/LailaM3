@@ -1,7 +1,19 @@
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import { flushPersistedState } from '@/adapters/storage/coalesced';
+import { resolvePerformanceMode } from '@/core/device-tier';
+import { isLowMemoryRuntime } from '@/services/device';
+import { useSettingsStore } from '@/stores/settings';
 import { useUIStore } from '@/stores/ui';
+
+/** Low-memory devices drop decoded covers when the app leaves the foreground. */
+function clearImageCacheInPerformanceMode() {
+  if (Platform.OS === 'web') return;
+  const { performanceMode } = useSettingsStore.getState();
+  if (!resolvePerformanceMode(performanceMode, isLowMemoryRuntime())) return;
+  void Image.clearMemoryCache();
+}
 
 /**
  * Tracks foreground/background so animations and non-essential work can stop.
@@ -15,7 +27,10 @@ export function AppStateBridge() {
   useEffect(() => {
     const setForeground = (value: boolean) => {
       useUIStore.getState().setForeground(value);
-      if (!value) void flushPersistedState();
+      if (!value) {
+        void flushPersistedState();
+        clearImageCacheInPerformanceMode();
+      }
     };
 
     if (Platform.OS === 'web') {

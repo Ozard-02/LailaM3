@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { StyleSheet, type ViewStyle } from 'react-native';
+import { StyleSheet, View, type ViewStyle } from 'react-native';
 import Animated, {
   cancelAnimation,
   makeMutable,
@@ -43,6 +43,19 @@ export function Skeleton({ style }: { style?: ViewStyle }) {
   const animated = useAnimatedStyle(() => ({
     opacity: animate ? pulse.value : 0.6,
   }));
+
+  if (!animate) {
+    return (
+      <View
+        style={[
+          styles.base,
+          { backgroundColor: theme.colors.elevated2, borderRadius: theme.radius.sm },
+          style,
+          { opacity: 0.6 },
+        ]}
+      />
+    );
+  }
 
   return (
     <Animated.View

@@ -74,6 +74,18 @@ export function MarqueeText({
     transform: [{ translateX: offset.get() }],
   }));
 
+  // Static single line: no ScrollView measurement, no duplicated text and no
+  // animation loop while performance mode (or the system) asks for less motion.
+  if (theme.reduceMotion) {
+    return (
+      <View style={styles.container}>
+        <Text variant={variant} tone={tone} style={style} numberOfLines={1} ellipsizeMode="tail">
+          {children}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View
       style={styles.container}

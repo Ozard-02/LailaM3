@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import type { PerformanceModeSetting } from '@/core/device-tier';
 import { appStore } from '@/services/appStorage';
 import type { ChromeRadius } from '@/theme/tokens';
 
@@ -12,6 +13,8 @@ interface SettingsState {
   maxBitRate: number | undefined;
   showCodecBadge: boolean;
   reduceBlur: boolean;
+  /** Auto follows the device RAM; On/Off override it. */
+  performanceMode: PerformanceModeSetting;
   hubUrl: string;
   swipeLeftAction: SwipeAction;
   swipeRightAction: SwipeAction;
@@ -29,6 +32,7 @@ interface SettingsState {
   setMaxBitRate: (value: number | undefined) => void;
   toggleCodecBadge: () => void;
   toggleReduceBlur: () => void;
+  setPerformanceMode: (mode: PerformanceModeSetting) => void;
   setHubUrl: (url: string) => void;
   setSwipeAction: (side: 'left' | 'right', action: SwipeAction) => void;
   toggleContinueWithRadio: () => void;
@@ -53,6 +57,7 @@ export const useSettingsStore = create<SettingsState>()(
       maxBitRate: undefined,
       showCodecBadge: true,
       reduceBlur: false,
+      performanceMode: 'auto',
       hubUrl: '',
       swipeLeftAction: 'addToQueue',
       swipeRightAction: 'playNext',
@@ -67,6 +72,7 @@ export const useSettingsStore = create<SettingsState>()(
       setMaxBitRate: (maxBitRate) => set({ maxBitRate }),
       toggleCodecBadge: () => set((state) => ({ showCodecBadge: !state.showCodecBadge })),
       toggleReduceBlur: () => set((state) => ({ reduceBlur: !state.reduceBlur })),
+      setPerformanceMode: (performanceMode) => set({ performanceMode }),
       setHubUrl: (hubUrl) => set({ hubUrl }),
       setSwipeAction: (side, action) =>
         set(side === 'left' ? { swipeLeftAction: action } : { swipeRightAction: action }),
