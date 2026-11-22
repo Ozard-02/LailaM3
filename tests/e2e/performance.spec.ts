@@ -15,6 +15,12 @@ async function openSettings(page: Page) {
   await expect(page.getByTestId('performance-mode')).toBeVisible();
 }
 
+async function playFirstTrack(page: Page) {
+  await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect(page.getByRole('button', { name: /Now playing: First Light/ })).toBeVisible();
+}
+
 test.describe('performance mode', () => {
   test('turns on manually, hides the blur toggle and persists', async ({ page }) => {
     await login(page);
@@ -44,41 +50,43 @@ test.describe('performance mode', () => {
     ).toHaveAttribute('aria-pressed', 'true');
   });
 
-  test('drops backdrop blur and halves cover requests when on', async ({ page }) => {
+  test('skips parked artwork, 1x covers and the blurred backdrop when on', async ({ page }) => {
     await login(page);
-    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
-    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
-    await page.getByRole('button', { name: /Now playing: First Light/ }).click();
-    const sheet = page.getByTestId('player-sheet');
-    await expect(sheet).toHaveAttribute('aria-modal', 'true');
-
-    // Auto resolves to off on web, so the full 900 px blurred backdrop and 2x
-    // cover requests must be present before performance mode is enabled.
-    const backdrop = page.getByTestId('player-backdrop');
-    await expect(backdrop.locator('img')).toHaveCount(1);
-    const normalCover = sheet.locator('[data-testid^="artwork-"] img').first();
-    await expect(normalCover).toBeVisible();
-    const normalSrc = await normalCover.getAttribute('src');
-    expect(normalSrc).toBeTruthy();
-    const normalSize = Number(new URL(normalSrc!, page.url()).searchParams.get('size'));
-    expect(normalSize).toBeGreaterThan(0);
-
-    await page.getByRole('button', { name: 'Close player' }).click();
     await openSettings(page);
     const card = page.getByTestId('performance-mode');
     await card.getByRole('button', { name: 'On', exact: true }).click();
-    await page.getByRole('button', { name: /Now playing: First Light/ }).click();
-    await expect(sheet).toHaveAttribute('aria-modal', 'true');
 
-    // The blurred scene is gone and the visible cover asks for its laid-out
-    // size instead of the 2x decode.
-    await expect(backdrop.locator('img')).toHaveCount(0);
-    const perfCover = sheet.locator('[data-testid^="artwork-"] img').first();
-    await expect(perfCover).toBeVisible();
-    const perfSrc = await perfCover.getAttribute('src');
-    expect(perfSrc).toBeTruthy();
-    const perfSize = Number(new URL(perfSrc!, page.url()).searchParams.get('size'));
-    expect(perfSize).toBeGreaterThan(0);
-    expect(perfSize).toBeLessThan(normalSize);
+    await page.goto('/');
+    await playFirstTrack(page);
+
+    const playerArtwork = page.getByTestId('player-artwork');
+    const artwork = playerArtwork.locator('[data-testid^="artwork-"]');
+    // Parked: performance mode does not decode the hidden large cover.
+    await expect(artwork).toHaveCount(0);
+
+    await page.getByRole('button', { name: /Now playing: First Light/ }).click();
+    await expect(page.getByTestId('player-sheet')).toHaveAttribute('aria-modal', 'true');
+
+    // The cover is decoded only once the player is actually open, and it asks
+    // the server for exactly the laid-out size instead of the 2x request.
+    await expect(artwork).toHaveCount(1);
+    const image = playerArtwork.locator('img').first();
+    const box = await image.boundingBox();
+    const src = await image.getAttribute('src');
+    expect(box?.width).toBeGreaterThan(0);
+    expect(src).toBeTruthy();
+    const requested = Number(new URL(src!).searchParams.get('size'));
+    expect(requested).toBeGreaterThan(0);
+    expect(Math.abs(requested - (box?.width ?? 0))).toBeLessThanOrEqual(1);
+
+    await expect(page.getByTestId('player-backdrop').locator('img')).toHaveCount(0);
+  });
+
+  test('keeps the parked player cover in normal mode', async ({ page }) => {
+    await login(page);
+    await playFirstTrack(page);
+    await expect(
+      page.getByTestId('player-artwork').locator('[data-testid^="artwork-"]'),
+    ).toHaveCount(1);
   });
 });

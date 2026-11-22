@@ -13,6 +13,12 @@ interface UIState {
   foreground: boolean;
   miniPlayerHidden: boolean;
   playerOpen: boolean;
+  /**
+   * True while a mounted PlayerScreen owns the palette surface. The standalone
+   * `/player` route has no `playerOpen`, so performance mode needs this to
+   * decide whether the track palette may tint the theme.
+   */
+  playerPaletteOpen: boolean;
   /** Increments when a shortcut asks the player to close through its spring. */
   closePlayerRequest: number;
   /** Increments when `F` asks to open/close the player. */
@@ -26,6 +32,7 @@ interface UIState {
   setForeground: (foreground: boolean) => void;
   setMiniPlayerHidden: (hidden: boolean) => void;
   setPlayerOpen: (open: boolean) => void;
+  setPlayerPaletteOpen: (open: boolean) => void;
   requestClosePlayer: () => void;
   requestTogglePlayer: () => void;
   setShortcutsOpen: (open: boolean) => void;
@@ -39,6 +46,7 @@ export const useUIStore = create<UIState>((set) => ({
   foreground: true,
   miniPlayerHidden: false,
   playerOpen: false,
+  playerPaletteOpen: false,
   closePlayerRequest: 0,
   togglePlayerRequest: 0,
   shortcutsOpen: false,
@@ -48,6 +56,7 @@ export const useUIStore = create<UIState>((set) => ({
   setForeground: (foreground) => set({ foreground }),
   setMiniPlayerHidden: (miniPlayerHidden) => set({ miniPlayerHidden }),
   setPlayerOpen: (playerOpen) => set({ playerOpen }),
+  setPlayerPaletteOpen: (playerPaletteOpen) => set({ playerPaletteOpen }),
   requestClosePlayer: () =>
     set((state) => ({ closePlayerRequest: state.closePlayerRequest + 1 })),
   requestTogglePlayer: () =>

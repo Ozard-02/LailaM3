@@ -47,11 +47,6 @@ export interface Theme {
   performanceMode: boolean;
   /** True when this device is at or below the low-memory threshold. */
   lowMemoryDevice: boolean;
-  /**
-   * Whether the artwork palette should follow the player. Always true outside
-   * performance mode, so player open/close does not rebuild the theme.
-   */
-  palettePlayerOpen: boolean;
   setArtworkFromUrl: (url: string | undefined) => void;
   resetArtwork: () => void;
 }
@@ -108,20 +103,26 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const performanceSetting = useSettingsStore((state) => state.performanceMode);
   const reduceBlurSetting = useSettingsStore((state) => state.reduceBlur);
   const playerOpen = useUIStore((state) => state.playerOpen);
+  const playerPaletteOpen = useUIStore((state) => state.playerPaletteOpen);
   const lowMemoryDevice = isLowMemoryRuntime();
   const performanceMode = resolvePerformanceMode(performanceSetting, lowMemoryDevice);
-  // Only performance mode ties palette work to the player. Outside it this is
-  // a constant, so opening or closing the player never rebuilds the theme or
-  // re-arms palette grace timers.
-  const palettePlayerOpen = performanceMode ? playerOpen : true;
+  // In normal mode the palette is global and the player's open state is
+  // irrelevant. Only performance mode needs `playerOpen` in the theme memo, so
+  // keeping it out of the dependency list elsewhere avoids rebuilding the
+  // context (and re-rendering every `useTheme()` consumer) on player open/close.
+  const palettePlayerOpen = performanceMode ? playerOpen || playerPaletteOpen : true;
   const activeUrl = useRef<string | undefined>(undefined);
 
   const setArtworkFromUrl = useCallback(
     (url: string | undefined) => {
       // Performance mode keeps the palette for the open player only. Ignoring
       // browsing screens and track changes while parked avoids decoding and
-      // extracting a cover the user is not looking at.
-      if (!palettePlayerOpen) return;
+      // extracting a cover the user is not looking at. An explicit clear still
+      // goes through so a parked player cannot keep the previous palette.
+      if (performanceMode && url !== undefined) {
+        const ui = useUIStore.getState();
+        if (!ui.playerOpen && !ui.playerPaletteOpen) return;
+      }
       activeUrl.current = url;
       if (!url) {
         setArtwork(neutralPalette);
@@ -150,7 +151,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
         });
       });
     },
-    [palettePlayerOpen],
+    [performanceMode],
   );
 
   const resetArtwork = useCallback(() => {
@@ -204,7 +205,6 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       reduceBlur: reduceBlurSetting || performanceMode,
       performanceMode,
       lowMemoryDevice,
-      palettePlayerOpen,
       setArtworkFromUrl,
       resetArtwork,
     };

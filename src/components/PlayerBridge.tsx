@@ -10,6 +10,7 @@ export function PlayerBridge() {
   const track = useCurrentTrack();
   const server = useAuthStore((state) => state.server);
   const theme = useTheme();
+  const performanceMode = theme.performanceMode;
   const setArtworkFromUrl = theme.setArtworkFromUrl;
   const resetArtwork = theme.resetArtwork;
   const notificationAsked = useRef(false);
@@ -46,17 +47,14 @@ export function PlayerBridge() {
     });
   }, []);
 
-  const palettePlayerOpen = theme.palettePlayerOpen;
-  const coverUrl =
-    track?.coverArt && server ? paletteCoverUrl(server, track.coverArt) : undefined;
-
   useEffect(() => {
-    // Outside performance mode this is always true; inside it only runs while
-    // the player is visible.
-    if (!palettePlayerOpen) return;
-    if (coverUrl) setArtworkFromUrl(coverUrl);
-    else resetArtwork();
-  }, [palettePlayerOpen, coverUrl, setArtworkFromUrl, resetArtwork]);
+    if (performanceMode) return;
+    if (track?.coverArt && server) {
+      setArtworkFromUrl(paletteCoverUrl(server, track.coverArt));
+    } else {
+      resetArtwork();
+    }
+  }, [performanceMode, track?.coverArt, server, setArtworkFromUrl, resetArtwork]);
 
   return null;
 }

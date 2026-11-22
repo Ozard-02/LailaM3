@@ -1,15 +1,18 @@
-import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { isLowMemoryDevice } from '@/core/device-tier';
 
-let cached: boolean | undefined;
+let cachedMemory: number | null | undefined;
 
 /**
- * Total RAM is fixed for the app's lifetime, so read it once. On web the value
- * is not meaningful; the manual On/Off setting still works there.
+ * Total RAM in bytes. It is fixed for the app's lifetime, so read it once.
+ * The web build resolves `device.web.ts` instead of this native module.
  */
+export function getDeviceTotalMemoryBytes(): number | null {
+  if (cachedMemory !== undefined) return cachedMemory;
+  cachedMemory = Device.totalMemory ?? null;
+  return cachedMemory;
+}
+
 export function isLowMemoryRuntime(): boolean {
-  if (cached !== undefined) return cached;
-  cached = Platform.OS !== 'web' && isLowMemoryDevice(Device.totalMemory);
-  return cached;
+  return isLowMemoryDevice(getDeviceTotalMemoryBytes());
 }

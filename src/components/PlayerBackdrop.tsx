@@ -100,10 +100,10 @@ export function PlayerBackdrop({
   visible = true,
   reduceMotion,
 }: PlayerBackdropProps) {
-  // Narrow selectors: the backdrop must not re-render on every palette change
-  // while the player is parked. It only cares whether blur is enabled.
   const reduceBlurSetting = useSettingsStore((state) => state.reduceBlur);
   const performanceSetting = useSettingsStore((state) => state.performanceMode);
+  // Narrow subscriptions instead of the whole theme: palette changes while the
+  // player is parked must not re-render this subtree.
   const reduceBlur =
     reduceBlurSetting || resolvePerformanceMode(performanceSetting, isLowMemoryRuntime());
   const [layers, setLayers] = useState<Layer[]>([]);

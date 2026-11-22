@@ -41,6 +41,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useCurrentTrack, usePlayerStore } from '@/stores/player';
 import { isOfflineNow, useEffectiveOffline, useOfflineStore } from '@/stores/offline';
 import { useSettingsStore } from '@/stores/settings';
+import { useUIStore } from '@/stores/ui';
 import { paletteCoverUrl } from '@/theme/palette';
 import { useTheme } from '@/theme/ThemeProvider';
 import { motion } from '@/theme/tokens';
@@ -132,30 +133,45 @@ export const PlayerScreen = memo(function PlayerScreen({
     track?.coverArt && server ? paletteCoverUrl(server, track.coverArt) : undefined;
   const paletteMatches = !track?.coverArt || theme.artworkUrl === paletteUrl;
   const paletteGraceOver = paletteGrace.over && paletteGrace.cover === track?.coverArt;
-  const palettePlayerOpen = theme.palettePlayerOpen;
   const setArtworkFromUrl = theme.setArtworkFromUrl;
   const resetArtwork = theme.resetArtwork;
+  const setPlayerPaletteOpen = useUIStore((state) => state.setPlayerPaletteOpen);
+  // Tell the theme that a player surface is showing the palette. In the sheet
+  // this mirrors `playerOpen`; on the standalone `/player` route it is the
+  // only signal, so performance mode can still tint the opened player.
+  useEffect(() => {
+    // Only performance mode needs this signal; in normal mode the palette is
+    // global and writing the store on every open/close would be wasted work.
+    if (!performanceMode || !active) return undefined;
+    setPlayerPaletteOpen(true);
+    return () => setPlayerPaletteOpen(false);
+  }, [active, performanceMode, setPlayerPaletteOpen]);
   useEffect(() => {
     // Another screen (album/artist) may own the palette while the player is
     // parked. Re-assert the playing track's palette when it opens.
-    if (!palettePlayerOpen || !paletteUrl) return;
-    setArtworkFromUrl(paletteUrl);
-  }, [palettePlayerOpen, paletteUrl, setArtworkFromUrl]);
+    if (!active) return;
+    if (paletteUrl) setArtworkFromUrl(paletteUrl);
+    // A track without a cover must not keep the previous track's palette.
+    else resetArtwork();
+  }, [active, paletteUrl, resetArtwork, setArtworkFromUrl]);
   useEffect(() => {
     // Performance mode only tints the open player. Park the palette with it so
-    // the next open never flashes the previous track's colours. Outside that
-    // mode the palette is global, so this never runs.
-    if (palettePlayerOpen) return;
+    // the next open never flashes the previous track's colours.
+    if (!performanceMode || active) return;
     resetArtwork();
-  }, [palettePlayerOpen, resetArtwork]);
+  }, [active, performanceMode, resetArtwork]);
+  // Normal mode keeps the pre-performance-mode timer lifecycle: it only
+  // re-arms when the cover changes. Performance mode skips it while parked,
+  // where the backdrop is not rendered at all.
+  const paletteTimerActive = performanceMode ? active : true;
   useEffect(() => {
-    if (!palettePlayerOpen) return;
+    if (!paletteTimerActive) return;
     const cover = track?.coverArt;
     if (!cover) return;
     // Safety net for a slow or failed extraction: never freeze the backdrop.
     const timer = setTimeout(() => setPaletteGrace({ cover, over: true }), 1200);
     return () => clearTimeout(timer);
-  }, [palettePlayerOpen, track?.coverArt]);
+  }, [paletteTimerActive, track?.coverArt]);
 
   const ownQueueProgress = useSharedValue(0);
   const queueP = queueProgress ?? ownQueueProgress;
@@ -518,6 +534,7 @@ export const PlayerScreen = memo(function PlayerScreen({
           <Animated.View style={[styles.artWrap, split && styles.artWrapWide, coverStyle]}>
             <View
               ref={artRef}
+              testID="player-artwork"
               collapsable={false}
               onLayout={() => reportRect('art', artRef)}
               aria-hidden={hideShared}
