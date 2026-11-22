@@ -69,7 +69,13 @@ function rememberPalette(url: string, palette: ArtworkPalette): void {
 
 export function ThemeProvider({ children }: PropsWithChildren) {
   const scheme = useColorScheme();
-  const mode: ThemeMode = scheme === 'light' ? 'light' : 'dark';
+  const themePreference = useSettingsStore((state) => state.themePreference);
+  const mode: ThemeMode =
+    themePreference === 'system'
+      ? scheme === 'light'
+        ? 'light'
+        : 'dark'
+      : themePreference;
   // Reanimated's useReducedMotion is a startup-only constant. Start from it so
   // the first render is correct, then follow the system setting live.
   const initialReduceMotion = useReducedMotion();

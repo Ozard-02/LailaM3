@@ -29,6 +29,7 @@ import {
   type DownloadQuality,
   type StreamQuality,
   type SwipeAction,
+  type ThemePreference,
 } from '@/stores/settings';
 import type { ChromeRadius } from '@/theme/tokens';
 import type { PerformanceModeSetting } from '@/core/device-tier';
@@ -53,6 +54,12 @@ const CHROME_SHAPES: { value: ChromeRadius; label: string }[] = [
   { value: 'pill', label: 'Pill' },
   { value: 'rounded', label: 'Rounded' },
   { value: 'soft', label: 'Soft' },
+];
+
+const THEME_PREFERENCES: { value: ThemePreference; label: string }[] = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'System' },
 ];
 
 const PERFORMANCE_MODES: { value: PerformanceModeSetting; label: string }[] = [
@@ -211,6 +218,8 @@ export default function SettingsScreen() {
   const toggleReduceBlur = useSettingsStore((state) => state.toggleReduceBlur);
   const performanceModeSetting = useSettingsStore((state) => state.performanceMode);
   const setPerformanceMode = useSettingsStore((state) => state.setPerformanceMode);
+  const themePreference = useSettingsStore((state) => state.themePreference);
+  const setThemePreference = useSettingsStore((state) => state.setThemePreference);
   const hubUrl = useSettingsStore((state) => state.hubUrl);
   const setHubUrl = useSettingsStore((state) => state.setHubUrl);
   const [hubInput, setHubInput] = useState(hubUrl);
@@ -246,6 +255,8 @@ export default function SettingsScreen() {
     OFFLINE_LIMITS.find((item) => item.value === offlineLimitBytes)?.label ?? 'Off';
   const shapeLabel =
     CHROME_SHAPES.find((item) => item.value === chromeRadius)?.label ?? chromeRadius;
+  const themeLabel =
+    THEME_PREFERENCES.find((item) => item.value === themePreference)?.label ?? 'Dark';
   const accentLabel = accentColor
     ? ACCENT_PRESETS.find((preset) => preset.value === accentColor)?.name ?? 'Custom'
     : 'Artwork';
@@ -258,7 +269,7 @@ export default function SettingsScreen() {
     : 'Not connected';
   const playbackSummary = `${qualityLabel} · radio ${continueWithRadio ? 'on' : 'off'}`;
   const downloadsSummary = `${downloadQualityLabel} · ${parallelDownloads} parallel · ${offlineLimitLabel}`;
-  const appearanceSummary = `${shapeLabel} · ${accentLabel}${
+  const appearanceSummary = `${themeLabel} · ${shapeLabel} · ${accentLabel}${
     theme.performanceMode ? ' · Performance' : ''
   }`;
   const gesturesSummary = `${swipeLeftLabel} / ${swipeRightLabel}${
@@ -518,6 +529,24 @@ export default function SettingsScreen() {
         onToggle={() => toggleSection('appearance')}
         summary={appearanceSummary}
       >
+
+      <Surface testID="theme-preference" style={styles.card} bordered>
+        <Text variant="headline">Theme</Text>
+        <Text variant="caption" tone="secondary">
+          Dark is the default and stays on even when the device is in light mode.
+          System follows the device appearance.
+        </Text>
+        <View style={styles.swipeOptions}>
+          {THEME_PREFERENCES.map((item) => (
+            <Pill
+              key={item.value}
+              label={item.label}
+              selected={themePreference === item.value}
+              onPress={() => setThemePreference(item.value)}
+            />
+          ))}
+        </View>
+      </Surface>
 
       <Surface style={styles.card} bordered>
         <Text variant="headline">Player and tab shape</Text>

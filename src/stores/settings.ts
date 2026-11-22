@@ -7,6 +7,7 @@ import type { ChromeRadius } from '@/theme/tokens';
 export type StreamQuality = 'raw' | 'opus' | 'mp3';
 export type DownloadQuality = 'original' | 'opus' | 'mp3';
 export type SwipeAction = 'playNext' | 'addToQueue' | 'download' | 'none';
+export type ThemePreference = 'system' | 'dark' | 'light';
 
 interface SettingsState {
   quality: StreamQuality;
@@ -15,6 +16,8 @@ interface SettingsState {
   reduceBlur: boolean;
   /** Auto follows the device RAM; On/Off override it. */
   performanceMode: PerformanceModeSetting;
+  /** Dark is the default; System follows the device, Light is explicit. */
+  themePreference: ThemePreference;
   hubUrl: string;
   swipeLeftAction: SwipeAction;
   swipeRightAction: SwipeAction;
@@ -33,6 +36,7 @@ interface SettingsState {
   toggleCodecBadge: () => void;
   toggleReduceBlur: () => void;
   setPerformanceMode: (mode: PerformanceModeSetting) => void;
+  setThemePreference: (preference: ThemePreference) => void;
   setHubUrl: (url: string) => void;
   setSwipeAction: (side: 'left' | 'right', action: SwipeAction) => void;
   toggleContinueWithRadio: () => void;
@@ -58,6 +62,7 @@ export const useSettingsStore = create<SettingsState>()(
       showCodecBadge: true,
       reduceBlur: false,
       performanceMode: 'auto',
+      themePreference: 'dark',
       hubUrl: '',
       swipeLeftAction: 'addToQueue',
       swipeRightAction: 'playNext',
@@ -73,6 +78,7 @@ export const useSettingsStore = create<SettingsState>()(
       toggleCodecBadge: () => set((state) => ({ showCodecBadge: !state.showCodecBadge })),
       toggleReduceBlur: () => set((state) => ({ reduceBlur: !state.reduceBlur })),
       setPerformanceMode: (performanceMode) => set({ performanceMode }),
+      setThemePreference: (themePreference) => set({ themePreference }),
       setHubUrl: (hubUrl) => set({ hubUrl }),
       setSwipeAction: (side, action) =>
         set(side === 'left' ? { swipeLeftAction: action } : { swipeRightAction: action }),

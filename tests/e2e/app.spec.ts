@@ -1150,6 +1150,26 @@ test.describe('Laila web app', () => {
     await expect(hex).toHaveValue('#0A84FF');
   });
 
+  test('forces dark by default and lets the theme be changed', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await login(page);
+    await page.getByRole('button', { name: 'Settings' }).click();
+    const card = page.getByTestId('theme-preference');
+    await expect(card).toBeVisible();
+    const background = () =>
+      card.evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(await background()).toBe('rgb(21, 21, 24)');
+
+    const dark = page.getByRole('button', { name: 'Dark', exact: true });
+    const light = page.getByRole('button', { name: 'Light', exact: true });
+    await expect(dark).toHaveAttribute('aria-pressed', 'true');
+    await light.click();
+    await expect(light).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(background).toBe('rgb(255, 255, 255)');
+    await dark.click();
+    await expect.poll(background).toBe('rgb(21, 21, 24)');
+  });
+
   test('manual offline mode shows downloads only', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: 'Downloads' }).click();

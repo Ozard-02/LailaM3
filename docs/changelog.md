@@ -5,6 +5,16 @@ Dated implementation history. Current status and priorities live in
 
 ## 2026-11-22
 
+Forced dark theme by default.
+
+- New Theme preference in Settings → Appearance: Dark (default), Light, System.
+  Dark no longer follows the device appearance, so the app stays on the dark
+  palette even when Android is in light mode.
+- `ThemeProvider` resolves the stored preference; System keeps the previous
+  `useColorScheme` behaviour.
+- E2E checks the dark default under a light system scheme and switching to Light
+  and back.
+
 Lyrics landscape alignment and cover swipe.
 
 - The lyrics cover, title, transport and progress now share one centred stack
