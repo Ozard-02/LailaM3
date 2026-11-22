@@ -17,16 +17,11 @@ backend of its own.
 
 ## Screenshots
 
-<p align="center">
-  <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" alt="Home" width="48%"></a>
-  <a href="docs/screenshots/player.png"><img src="docs/screenshots/player.png" alt="Player" width="48%"></a>
-</p>
-<p align="center">
-  <a href="docs/screenshots/queue.png"><img src="docs/screenshots/queue.png" alt="Queue" width="48%"></a>
-  <a href="docs/screenshots/library.png"><img src="docs/screenshots/library.png" alt="Library" width="48%"></a>
-</p>
+| Home | Library | Player |
+|:---:|:---:|:---:|
+| [![Home](docs/screenshots/home.png)](docs/screenshots/home.png) | [![Library](docs/screenshots/library.png)](docs/screenshots/library.png) | [![Player](docs/screenshots/player.png)](docs/screenshots/player.png) |
 
-<p align="center"><sub>Home, Player, Queue and Library — captured with the bundled mock server, not a real library.</sub></p>
+<p align="center"><sub>Home, Library and Player — captured with the bundled mock server, not a real library.</sub></p>
 
 ## What is Laila?
 
