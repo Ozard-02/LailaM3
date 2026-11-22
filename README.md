@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" alt="Laila icon" width="112">
+</p>
+
 # Laila
 
 **A self-hosted music client for Android and the web.** Built for Navidrome and
@@ -13,11 +17,16 @@ backend of its own.
 
 ## Screenshots
 
-| Home | Library | Player |
-|---|---|---|
-| ![Home](docs/screenshots/home.png) | ![Library](docs/screenshots/library.png) | ![Player](docs/screenshots/player.png) |
+<p align="center">
+  <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" alt="Home" width="48%"></a>
+  <a href="docs/screenshots/player.png"><img src="docs/screenshots/player.png" alt="Player" width="48%"></a>
+</p>
+<p align="center">
+  <a href="docs/screenshots/queue.png"><img src="docs/screenshots/queue.png" alt="Queue" width="48%"></a>
+  <a href="docs/screenshots/library.png"><img src="docs/screenshots/library.png" alt="Library" width="48%"></a>
+</p>
 
-Screenshots use the bundled mock server, not a real library.
+<p align="center"><sub>Home, Player, Queue and Library — captured with the bundled mock server, not a real library.</sub></p>
 
 ## What is Laila?
 
