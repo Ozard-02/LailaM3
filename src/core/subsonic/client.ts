@@ -28,6 +28,29 @@ type Json = Record<string, unknown>;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+function abortError(endpoint: string): SubsonicError {
+  return new SubsonicError(0, `Request aborted: ${endpoint}`, { endpoint });
+}
+
+/** Abort-aware backoff sleep: do not start another request after cancel. */
+function wait(ms: number, signal: AbortSignal | undefined, endpoint: string): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(abortError(endpoint));
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(abortError(endpoint));
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 function asRecord(value: unknown): Json {
   return value && typeof value === 'object' ? (value as Json) : {};
 }
@@ -184,6 +207,7 @@ async function request(
   const maxAttempts = nonIdempotent.has(endpoint) ? 1 : 3;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) throw abortError(endpoint);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
     const onAbort = () => controller.abort();
@@ -204,12 +228,12 @@ async function request(
       const data = (await response.json()) as unknown;
       return extractEnvelope(data, endpoint);
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (signal?.aborted) throw abortError(endpoint);
       const status = error instanceof SubsonicError ? error.code : 0;
       const canRetry = attempt < maxAttempts - 1 && shouldRetryStatus(status, attempt);
       if (canRetry) {
         logger.debug('Retrying Subsonic request', { endpoint, attempt: attempt + 1, status });
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+        await wait(retryDelayMs(attempt), signal, endpoint);
         continue;
       }
       if (error instanceof SubsonicError) throw error;
@@ -359,6 +383,21 @@ export async function getGenres(
 ): Promise<Genre[]> {
   const envelope = await request(config, 'getGenres', {}, signal);
   return asArray(asRecord(envelope.genres).genre).map(mapGenre);
+}
+
+export async function getTopSongs(
+  config: ServerConfig,
+  artist: string,
+  options?: { count?: number },
+  signal?: AbortSignal,
+): Promise<Track[]> {
+  const envelope = await request(
+    config,
+    'getTopSongs',
+    { artist, count: options?.count ?? 50 },
+    signal,
+  );
+  return asArray(asRecord(envelope.topSongs).song).map(mapTrack);
 }
 
 export async function getSongsByGenre(
@@ -549,6 +588,7 @@ export const subsonic = {
   getPlaylists,
   getPlaylist,
   getGenres,
+  getTopSongs,
   getSongsByGenre,
   search3,
   getNowPlaying,

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +16,10 @@ export function ToastHost() {
   const insets = useSafeAreaInsets();
   const toast = useUIStore((state) => state.toast);
   const hideToast = useUIStore((state) => state.hideToast);
-  const queueState = usePlayerStore((state) => state.queueState);
+  // Only the empty/not-empty primitive matters here. Subscribing to the whole
+  // queue state made every auto-advance dismiss an open Undo toast.
+  const queueEmpty = usePlayerStore((state) => state.queueState.queue.length === 0);
+  const wasQueueEmpty = useRef(queueEmpty);
 
   useEffect(() => {
     if (!toast) return;
@@ -24,10 +27,14 @@ export function ToastHost() {
     return () => clearTimeout(timer);
   }, [hideToast, toast]);
 
-  // A new queue action replaces the old context: the previous Undo is stale.
+  // Clearing the queue replaces the context of an action toast (its Undo would
+  // restore into an empty queue), so dismiss that one. Advancing tracks never
+  // reaches this branch.
   useEffect(() => {
-    if (useUIStore.getState().toast) hideToast();
-  }, [hideToast, queueState]);
+    const cleared = queueEmpty && !wasQueueEmpty.current;
+    wasQueueEmpty.current = queueEmpty;
+    if (cleared && toast?.onAction) hideToast();
+  }, [hideToast, queueEmpty, toast]);
 
   if (!toast) return null;
 
@@ -42,7 +49,12 @@ export function ToastHost() {
           styles.toast,
           {
             backgroundColor: theme.colors.elevated2,
-            borderColor: toast.tone === 'error' ? theme.colors.danger : theme.colors.border,
+            borderColor:
+              toast.tone === 'error'
+                ? theme.colors.danger
+                : toast.tone === 'success'
+                  ? theme.colors.success
+                  : theme.colors.border,
             borderRadius: theme.radius.lg,
           },
         ]}

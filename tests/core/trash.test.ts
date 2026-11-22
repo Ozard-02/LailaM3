@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { ServerConfig, Track } from '@/core/models';
 import type { QueueState } from '@/core/queue/reducer';
 import {
+  createTrashAlbumUndo,
   createTrashUndo,
+  removeTracksEverywhere,
   removeTrackEverywhere,
+  restoreTracksEverywhere,
   restoreTrackEverywhere,
 } from '@/core/trash';
 
@@ -78,5 +81,108 @@ describe('trash queue helpers', () => {
     const restored = restoreTrackEverywhere(removed, undo);
     expect(restored.originalQueue).toBeNull();
     expect(restored.queue.map((item) => item.id)).toEqual(['a', 'b', 'c', 'c', 'd']);
+  });
+
+  it('captures an album snapshot and marks which tracks were actually added', () => {
+    const undo = createTrashAlbumUndo(
+      state,
+      'Album',
+      [track('c'), track('b')],
+      server,
+      'trash',
+      new Set(['c']),
+    );
+    expect(undo.albumName).toBe('Album');
+    expect(undo.entries.map((entry) => entry.addedToPlaylist)).toEqual([true, false]);
+    expect(undo.entries[0]?.queuePositions).toEqual([2, 3]);
+  });
+
+  it('removes an album in one pass and keeps the next surviving track', () => {
+    const removed = removeTracksEverywhere(state, ['b', 'c']);
+    expect(removed.queue.map((item) => item.id)).toEqual(['a', 'd']);
+    expect(removed.upNext.map((item) => item.id)).toEqual(['e']);
+    expect(removed.originalQueue?.map((item) => item.id)).toEqual(['a', 'd']);
+    expect(removed.index).toBe(2);
+  });
+
+  it('restores an album with duplicates without changing the playing track', () => {
+    const listening = { ...state, index: 0 };
+    const undo = createTrashAlbumUndo(
+      listening,
+      'Album',
+      [track('b'), track('c')],
+      server,
+      'trash',
+      new Set(['b', 'c']),
+    );
+    const removed = removeTracksEverywhere(listening, ['b', 'c']);
+    const restored = restoreTracksEverywhere(removed, undo);
+    expect(restored.queue.map((item) => item.id)).toEqual(['a', 'b', 'c', 'c', 'd']);
+    expect(restored.upNext.map((item) => item.id)).toEqual(['c', 'e']);
+    expect(restored.originalQueue?.map((item) => item.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(restored.index).toBe(0);
+    expect(restored.queue[restored.index]?.id).toBe('a');
+  });
+
+  it('restores an album after the current track was removed', () => {
+    const undo = createTrashAlbumUndo(
+      state,
+      'Album',
+      [track('c')],
+      server,
+      'trash',
+      new Set(['c']),
+    );
+    const removed = removeTracksEverywhere(state, ['c']);
+    expect(removed.queue[removed.index]?.id).toBe('d');
+    const restored = restoreTracksEverywhere(removed, undo);
+    expect(restored.queue.map((item) => item.id)).toEqual(['a', 'b', 'c', 'c', 'd']);
+    expect(restored.queue[restored.index]?.id).toBe('d');
+  });
+
+  it('restores a queue emptied by album trash with the first track selected', () => {
+    const before: QueueState = {
+      queue: [track('a'), track('b')],
+      index: 0,
+      upNext: [],
+      originalQueue: null,
+      repeat: 'off',
+      shuffle: false,
+    };
+    const undo = createTrashAlbumUndo(
+      before,
+      'Album',
+      [track('a'), track('b')],
+      server,
+      'trash',
+      new Set(['a', 'b']),
+    );
+    const removed = removeTracksEverywhere(before, ['a', 'b']);
+    expect(removed.index).toBe(-1);
+    const restored = restoreTracksEverywhere(removed, undo);
+    expect(restored.queue.map((item) => item.id)).toEqual(['a', 'b']);
+    expect(restored.index).toBe(0);
+  });
+
+  it('keeps an ended album queue ended after restore', () => {
+    const before: QueueState = {
+      ...state,
+      queue: [track('a'), track('b')],
+      index: 2,
+      upNext: [],
+      originalQueue: null,
+    };
+    const undo = createTrashAlbumUndo(
+      before,
+      'Album',
+      [track('b')],
+      server,
+      'trash',
+      new Set(['b']),
+    );
+    const removed = removeTracksEverywhere(before, ['b']);
+    const restored = restoreTracksEverywhere(removed, undo);
+    expect(restored.queue.map((item) => item.id)).toEqual(['a', 'b']);
+    expect(restored.index).toBe(2);
   });
 });

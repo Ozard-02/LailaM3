@@ -1,17 +1,21 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Shuffle } from '@/ui/icons';
 import { AlbumGrid } from '@/components/AlbumGrid';
 import { BackButton } from '@/components/BackButton';
 import { Screen } from '@/components/Screen';
 import { useArtist } from '@/hooks/useLibrary';
+import { useArtistShuffle } from '@/hooks/useArtistShuffle';
 import { offlineArtists } from '@/core/offline';
 import { useTheme } from '@/theme/ThemeProvider';
 import { paletteCoverUrl } from '@/theme/palette';
 import { useAuthStore } from '@/stores/auth';
 import { useEffectiveOffline, useOfflineStore } from '@/stores/offline';
 import { Artwork } from '@/ui/Artwork';
+import { Button } from '@/ui/Button';
 import { EmptyState } from '@/ui/EmptyState';
+import { ErrorNotice } from '@/ui/ErrorNotice';
 import { ErrorState } from '@/ui/ErrorState';
 import { Skeleton } from '@/ui/Skeleton';
 import { Text } from '@/ui/Text';
@@ -24,6 +28,7 @@ export default function ArtistScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 720;
   const artist = useArtist(id);
+  const { shuffleArtist, busy: shuffleBusy, error: shuffleError } = useArtistShuffle();
   const server = useAuthStore((state) => state.server);
   const offline = useEffectiveOffline();
   const offlineIndex = useOfflineStore((state) => state.index);
@@ -97,6 +102,17 @@ export default function ArtistScreen() {
           <Text variant="body" tone="secondary">
             {data.albumCount ?? albums.length} albums
           </Text>
+          <View style={styles.actions}>
+            <Button
+              label="Shuffle"
+              size="sm"
+              variant="secondary"
+              loading={shuffleBusy}
+              icon={<Shuffle size={15} color={theme.colors.text} />}
+              onPress={() => void shuffleArtist(data)}
+            />
+          </View>
+          {shuffleError ? <ErrorNotice message={shuffleError} focus={false} /> : null}
         </View>
       </View>
 
@@ -118,5 +134,11 @@ const styles = StyleSheet.create({
   headerText: {
     flex: 1,
     gap: 6,
+  },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 4,
   },
 });

@@ -106,10 +106,14 @@ export function buildStreamUrl(
   trackId: string,
   options?: { format?: string; maxBitRate?: number },
 ): string {
+  const format = options?.format ?? 'raw';
   return buildUrl(config, 'stream', {
     id: trackId,
-    format: options?.format ?? 'raw',
+    format,
     maxBitRate: options?.maxBitRate,
+    // Navidrome sends Content-Length for transcodes only when asked; browsers
+    // then report a finite duration instead of Infinity.
+    estimateContentLength: format !== 'raw' ? true : undefined,
   });
 }
 

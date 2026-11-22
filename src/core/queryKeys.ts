@@ -18,6 +18,8 @@ export const queryKeys = {
   artists: (server: ServerConfig | null) => ['artists', serverKey(server)] as const,
   artist: (server: ServerConfig | null, id: string | undefined) =>
     ['artist', serverKey(server), id] as const,
+  artistTracks: (server: ServerConfig | null, id: string | undefined) =>
+    ['artist-tracks', serverKey(server), id] as const,
   starred: (server: ServerConfig | null) => ['starred', serverKey(server)] as const,
   playlists: (server: ServerConfig | null) => ['playlists', serverKey(server)] as const,
   /** Prefix for invalidating every playlist list. */

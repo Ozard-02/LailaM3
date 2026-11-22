@@ -79,12 +79,16 @@ export function useArtist(id: string | undefined) {
   });
 }
 
-export function useStarred() {
+export function useStarred(options?: { staleTime?: number }) {
   const server = useAuthStore((state) => state.server);
   return useQuery({
     queryKey: queryKeys.starred(server),
     queryFn: () => getStarred2(server as ServerConfig),
     enabled: Boolean(server),
+    // Favourite mutations invalidate this query explicitly; a longer stale
+    // window keeps opening the Favourites tab from refetching the whole
+    // starred payload every time.
+    staleTime: options?.staleTime ?? 5 * 60_000,
   });
 }
 

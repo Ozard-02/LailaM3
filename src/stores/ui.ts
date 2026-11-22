@@ -6,7 +6,7 @@ export interface ToastState {
   message: string;
   actionLabel?: string;
   onAction?: () => void;
-  tone?: 'default' | 'error';
+  tone?: 'default' | 'success' | 'error';
 }
 
 interface UIState {

@@ -257,7 +257,10 @@ const server = http.createServer((request, response) => {
             name: ARTIST_NAMES[index % ARTIST_NAMES.length],
             coverArt: `cover-${index}`,
             albumCount: 2,
-            album: [album(String(index)), album(String(index + 3))],
+            album: [
+              album(String(index)),
+              album(String(index + ARTIST_NAMES.length)),
+            ],
           },
         });
         return;
@@ -347,6 +350,15 @@ const server = http.createServer((request, response) => {
           (artist) => artist.name.toLowerCase().includes(query),
         );
         json(response, { searchResult3: { artist: artists, album: albums, song: songs } });
+        return;
+      }
+      case 'getTopSongs': {
+        const artistName = url.searchParams.get('artist') ?? ARTIST_NAMES[0];
+        const index = ARTIST_NAMES.indexOf(artistName);
+        const albumId = `al-${index < 0 ? 0 : index}`;
+        json(response, {
+          topSongs: { song: [0, 1].map((n) => song(albumId, n)) },
+        });
         return;
       }
       case 'getRandomSongs':
