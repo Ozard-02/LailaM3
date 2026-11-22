@@ -82,7 +82,7 @@ Public release updated with the non-plugin upstream work of 2026-11-13…22.
 
 ### Tests and docs
 
-- 235 unit tests in 33 files; 90 default E2E checks (77 Chromium desktop, 12
+- 235 unit tests in 33 files; 91 default E2E checks (78 Chromium desktop, 12
   mobile, 1 Firefox) and an 11-check desktop `@smoke` tier.
 - The Media3 Kotlin module compiles; the new native queue sync still needs a
   hardware pass.

@@ -114,7 +114,7 @@ live in [`docs/testing.md`](docs/testing.md).
 ## Test baseline
 
 - 235 unit tests in 33 files.
-- 90 default E2E checks across Chromium desktop, the mobile viewport and one
+- 91 default E2E checks across Chromium desktop, the mobile viewport and one
   Firefox seek check, plus an 11-check desktop `@smoke` tier.
 - Typecheck, lint, unit tests, the production web export and the full default E2E
   suite pass.

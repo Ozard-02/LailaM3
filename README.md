@@ -217,7 +217,7 @@ npm run test:e2e:smoke # 11-check desktop smoke tier
 npm run test:e2e:all  # full desktop × mobile matrix
 ```
 
-Current baseline: **235 unit tests**, **90 default E2E checks**. See
+Current baseline: **235 unit tests**, **91 default E2E checks**. See
 [`docs/testing.md`](docs/testing.md) for coverage, codec/browser matrices and
 device status. The mock server is a development fixture and never holds real
 credentials.

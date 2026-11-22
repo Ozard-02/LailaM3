@@ -20,7 +20,7 @@ npm run profile:core  # large-input core benchmark (not part of `npm test`)
 ## Current baseline — 2026-11-22
 
 - **235 unit tests** in 33 files.
-- **90 default E2E checks**: 77 Chromium desktop, 12 mobile checks and one
+- **91 default E2E checks**: 78 Chromium desktop, 12 mobile checks and one
   Firefox seek check.
 - **11 desktop `@smoke` checks** via `npm run test:e2e:smoke`.
 - `FULL_E2E=1` was not re-measured after the latest queue/player pass.
