@@ -38,13 +38,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Installa SDK e NDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME non impostato dal runner}"
+          SDKMANAGER=$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
+            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
 
       - name: Installa dipendenze
         run: npm ci
