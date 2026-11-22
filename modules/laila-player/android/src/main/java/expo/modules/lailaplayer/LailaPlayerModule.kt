@@ -96,9 +96,20 @@ class LailaPlayerModule : Module() {
       }
 
       override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-        if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-          sendEvent("onAutoAdvance", mapOf("mediaId" to mediaItem?.mediaId))
-        }
+        val mapped =
+          when (reason) {
+            Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> "auto"
+            Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> "repeat"
+            else -> return
+          }
+        sendEvent(
+          "onAutoAdvance",
+          mapOf(
+            "mediaId" to mediaItem?.mediaId,
+            "index" to (controller?.currentMediaItemIndex ?: -1),
+            "reason" to mapped,
+          ),
+        )
       }
 
       override fun onPlayerError(error: PlaybackException) {
@@ -137,6 +148,34 @@ class LailaPlayerModule : Module() {
       refresh(c, emit = true)
     }.runOnQueue(Queues.MAIN)
 
+    AsyncFunction("syncQueue") { items: List<QueueItem>, activeIndex: Int ->
+      val c = controller ?: return@AsyncFunction
+      syncQueue(c, items, activeIndex)
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("skipToIndex") { index: Int, mediaId: String ->
+      val c = controller ?: return@AsyncFunction false
+      if (index !in 0 until c.mediaItemCount) return@AsyncFunction false
+      if (c.getMediaItemAt(index).mediaId != mediaId) return@AsyncFunction false
+      if (c.currentMediaItemIndex == index) c.seekTo(0)
+      else c.seekToDefaultPosition(index)
+      c.prepare()
+      c.play()
+      refresh(c, emit = true)
+      true
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("setRepeatMode") { mode: String ->
+      controller?.let { c ->
+        c.repeatMode =
+          when (mode) {
+            "one" -> Player.REPEAT_MODE_ONE
+            "all" -> Player.REPEAT_MODE_ALL
+            else -> Player.REPEAT_MODE_OFF
+          }
+      }
+    }.runOnQueue(Queues.MAIN)
+
     AsyncFunction("play") { requireController().play() }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("pause") { requireController().pause() }.runOnQueue(Queues.MAIN)
@@ -153,10 +192,6 @@ class LailaPlayerModule : Module() {
       controller?.volume = volume.coerceIn(0.0, 1.0).toFloat()
     }.runOnQueue(Queues.MAIN)
 
-    AsyncFunction("setPauseOnAutoAdvance") { enabled: Boolean ->
-      PlaybackBridge.pauseOnAutoAdvance = enabled
-    }
-
     AsyncFunction("setRemoteHandling") { enabled: Boolean ->
       PlaybackBridge.remoteListener = if (enabled) remoteListener else null
     }
@@ -166,6 +201,63 @@ class LailaPlayerModule : Module() {
     AsyncFunction("destroy") { release(stopPlayback = true) }.runOnQueue(Queues.MAIN)
 
     OnDestroy { main.post { release(stopPlayback = false) } }
+  }
+
+  /**
+   * Align the native queue around the playing item. Removing or re-adding the
+   * active item would restart it, so only the prefix and suffix are rebuilt
+   * and the active item is left untouched.
+   */
+  private fun syncQueue(c: MediaController, items: List<QueueItem>, activeIndex: Int) {
+    if (items.isEmpty()) {
+      c.clearMediaItems()
+      refresh(c, emit = true)
+      return
+    }
+    val targetIndex = activeIndex.coerceIn(0, items.size - 1)
+    val active = items[targetIndex]
+    val nativeActive = c.currentMediaItemIndex
+    val nativeCount = c.mediaItemCount
+    if (
+      nativeActive !in 0 until nativeCount ||
+        c.getMediaItemAt(nativeActive).mediaId != active.id
+    ) {
+      // The current track is not loaded yet (first start or a cold native
+      // service). A full load will rebuild the queue.
+      return
+    }
+
+    val alreadyAligned =
+      nativeActive == targetIndex &&
+        nativeCount == items.size &&
+        (0 until nativeCount).all { c.getMediaItemAt(it).mediaId == items[it].id }
+    if (alreadyAligned) return
+
+    PlaybackBridge.replaceHeaders(headerMap(items))
+
+    val suffixMatches =
+      nativeCount - (nativeActive + 1) == items.size - (targetIndex + 1) &&
+        (nativeActive + 1 until nativeCount).all { position ->
+          c.getMediaItemAt(position).mediaId ==
+            items[targetIndex + 1 + position - (nativeActive + 1)].id
+        }
+    if (!suffixMatches) {
+      if (nativeActive + 1 < nativeCount) c.removeMediaItems(nativeActive + 1, nativeCount)
+      val suffix = items.subList(targetIndex + 1, items.size).map(::toMediaItem)
+      if (suffix.isNotEmpty()) c.addMediaItems(nativeActive + 1, suffix)
+    }
+
+    val prefixMatches =
+      nativeActive == targetIndex &&
+        (0 until nativeActive).all { position ->
+          c.getMediaItemAt(position).mediaId == items[position].id
+        }
+    if (!prefixMatches) {
+      if (nativeActive > 0) c.removeMediaItems(0, nativeActive)
+      val prefix = items.subList(0, targetIndex).map(::toMediaItem)
+      if (prefix.isNotEmpty()) c.addMediaItems(0, prefix)
+    }
+    refresh(c, emit = true)
   }
 
   private fun connect(promise: Promise) {

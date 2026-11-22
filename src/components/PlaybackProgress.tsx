@@ -1,4 +1,6 @@
 import { StyleSheet, View } from 'react-native';
+import { resolveDuration } from '@/core/audio/duration';
+import { currentTrack as selectCurrentTrack } from '@/core/queue/reducer';
 import { usePlayerStore } from '@/stores/player';
 import { useTheme } from '@/theme/ThemeProvider';
 import { ProgressBar } from '@/ui/ProgressBar';
@@ -26,7 +28,9 @@ export function PlaybackProgress({
   layout = 'stacked',
 }: PlaybackProgressProps) {
   const position = usePlayerStore((state) => state.position);
-  const duration = usePlayerStore((state) => state.duration);
+  const duration = usePlayerStore((state) =>
+    resolveDuration(state.duration, selectCurrentTrack(state.queueState)?.duration),
+  );
   const seek = usePlayerStore((state) => state.seek);
 
   const bar = (
@@ -75,7 +79,9 @@ export function PlaybackProgress({
 export function CompactPlaybackProgress() {
   const theme = useTheme();
   const position = usePlayerStore((state) => state.position);
-  const duration = usePlayerStore((state) => state.duration);
+  const duration = usePlayerStore((state) =>
+    resolveDuration(state.duration, selectCurrentTrack(state.queueState)?.duration),
+  );
   const ratio = duration > 0 ? Math.max(0, Math.min(1, position / duration)) : 0;
   return (
     <View style={[styles.compactTrack, { backgroundColor: theme.colors.accentSoft }]}>

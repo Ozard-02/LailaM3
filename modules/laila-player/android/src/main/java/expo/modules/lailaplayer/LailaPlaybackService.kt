@@ -50,18 +50,6 @@ class LailaPlaybackService : MediaSessionService() {
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
 
-    player.addListener(
-      object : Player.Listener {
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-          // Pause here, on the player thread, so the next native item does not
-          // keep playing while JS decides (repeat one, up next, radio, ...).
-          if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && PlaybackBridge.pauseOnAutoAdvance) {
-            player.pause()
-          }
-        }
-      },
-    )
-
     val builder =
       MediaSession.Builder(this, QueueForwardingPlayer(player))
         .setCallback(SessionCallback())

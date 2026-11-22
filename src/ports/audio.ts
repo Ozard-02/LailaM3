@@ -1,5 +1,19 @@
 export type AudioStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error';
 
+export type AudioRepeatMode = 'off' | 'all' | 'one';
+
+/**
+ * Whether the store accepts a transition the native player already made, or
+ * takes over and drives playback itself.
+ */
+export type AutoAdvanceDecision = 'keep' | 'takeover';
+
+export interface AutoAdvanceTransition {
+  mediaId?: string;
+  index?: number;
+  reason?: 'auto' | 'repeat';
+}
+
 export interface AudioSource {
   id: string;
   url: string;
@@ -41,6 +55,20 @@ export interface AudioEngine {
    * removed when that id still sits at the index.
    */
   removeQueueItem?: (index: number, mediaId: string) => Promise<void>;
+  /**
+   * Optional: align the OS-facing queue with the store's effective queue
+   * (queue order with Up Next spliced after the current track) without
+   * reloading the item that is currently playing.
+   */
+  syncQueue?: (sources: AudioSource[], activeIndex: number) => Promise<void>;
+  /**
+   * Optional: skip to an index in the native queue when that item still has
+   * the expected media id. Returns false so the caller can fall back to a
+   * full reload when the native queue is stale.
+   */
+  skipToIndex?: (index: number, mediaId: string) => Promise<boolean>;
+  /** Optional: mirror Laila's repeat mode onto the native player. */
+  setRepeatMode?: (mode: AudioRepeatMode) => Promise<void>;
   play(): Promise<void>;
   pause(): Promise<void>;
   seek(position: number): Promise<void>;
@@ -51,10 +79,12 @@ export interface AudioEngine {
   setRemoteHandlers?: (handlers: AudioRemoteHandlers) => () => void;
   /**
    * Optional: called when the OS/native queue advances on its own. The store
-   * remains the source of truth for repeat, shuffle and up-next.
+   * remains the source of truth for repeat, shuffle and up-next. The handler
+   * runs synchronously before the engine decides whether to pause, so a
+   * `keep` answer lets the native player continue without a gap.
    */
   setAutoAdvanceHandler?: (
-    handler: (mediaId?: string) => void | Promise<void>,
+    handler: (transition: AutoAdvanceTransition) => AutoAdvanceDecision,
   ) => () => void;
   destroy(): Promise<void>;
 }

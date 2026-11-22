@@ -3,6 +3,7 @@ import type { Track } from '@/core/models';
 import {
   applyTrackPatches,
   currentTrack,
+  effectiveQueue,
   emptyQueue,
   queueReducer,
   type QueueState,
@@ -149,6 +150,105 @@ describe('queue reducer', () => {
     const state = queueReducer(play(), { type: 'clear' });
     expect(state.queue).toHaveLength(0);
     expect(state.index).toBe(-1);
+  });
+});
+
+describe('effective queue', () => {
+  it('returns an empty result for an empty queue', () => {
+    expect(effectiveQueue(emptyQueue)).toEqual({ tracks: [], index: -1 });
+  });
+
+  it('returns the queue unchanged when Up Next is empty', () => {
+    const state = play(emptyQueue, 2);
+    const effective = effectiveQueue(state);
+    expect(effective.tracks).toBe(state.queue);
+    expect(effective.index).toBe(2);
+  });
+
+  it('splices Up Next right after the current track', () => {
+    const state: QueueState = {
+      ...play(emptyQueue, 1),
+      upNext: [track('x'), track('y')],
+    };
+    const effective = effectiveQueue(state);
+    expect(effective.tracks.map((item) => item.id)).toEqual([
+      'a',
+      'b',
+      'x',
+      'y',
+      'c',
+      'd',
+    ]);
+    expect(effective.index).toBe(1);
+  });
+
+  it('matches the queue after consuming Up Next with advance', () => {
+    const state: QueueState = {
+      ...play(emptyQueue, 1),
+      upNext: [track('x')],
+    };
+    const effective = effectiveQueue(state);
+    const advanced = effectiveQueue(queueReducer(state, { type: 'advance' }));
+    expect(advanced.index).toBe(effective.index + 1);
+    expect(advanced.tracks.map((item) => item.id)).toEqual(
+      effective.tracks.map((item) => item.id),
+    );
+  });
+
+  it('ignores Up Next when the queue has already ended', () => {
+    const state: QueueState = {
+      ...play(emptyQueue, 3),
+      index: 4,
+      upNext: [track('x')],
+    };
+    const effective = effectiveQueue(state);
+    expect(effective.tracks).toBe(state.queue);
+    expect(effective.index).toBe(4);
+  });
+});
+
+describe('reorder while shuffled', () => {
+  it('preserves the unshuffled original order instead of replacing it', () => {
+    const state = queueReducer(play(emptyQueue, 1), { type: 'toggleShuffle' });
+    const reordered = queueReducer(state, {
+      type: 'reorder',
+      queue: [track('a'), track('b'), track('c'), track('d')],
+    });
+
+    expect(reordered.shuffle).toBe(true);
+    expect(reordered.queue.map((item) => item.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(reordered.originalQueue?.map((item) => item.id)).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
+    expect(currentTrack(reordered)?.id).toBe('b');
+    expect(reordered.index).toBe(1);
+
+    const unshuffled = queueReducer(reordered, { type: 'toggleShuffle' });
+    expect(unshuffled.shuffle).toBe(false);
+    expect(unshuffled.queue.map((item) => item.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(currentTrack(unshuffled)?.id).toBe('b');
+  });
+
+  it('filters removed tracks out of the original order', () => {
+    const state = queueReducer(play(emptyQueue, 1), { type: 'toggleShuffle' });
+    const reordered = queueReducer(state, {
+      type: 'reorder',
+      queue: [track('d'), track('b'), track('a')],
+    });
+
+    expect(reordered.queue.map((item) => item.id)).toEqual(['d', 'b', 'a']);
+    expect(reordered.originalQueue?.map((item) => item.id)).toEqual(['a', 'b', 'd']);
+  });
+
+  it('keeps originalQueue absent when the queue is not shuffled', () => {
+    const reordered = queueReducer(play(emptyQueue, 1), {
+      type: 'reorder',
+      queue: [track('d'), track('a'), track('c'), track('b')],
+    });
+    expect(reordered.originalQueue).toBeNull();
   });
 });
 

@@ -96,6 +96,15 @@ const coverPending = new Set<string>();
 /** Coalesce completed downloads before copying the offline index. */
 const DOWNLOAD_FLUSH_MS = 250;
 
+/**
+ * In-flight downloads that were cancelled or removed. `start()` cannot always
+ * be interrupted immediately, so its completion handler checks this set (and
+ * the generation below) before it may touch the index.
+ */
+const cancelledIds = new Set<string>();
+/** Bumped by `clearAll()`; any older completion is discarded. */
+let downloadGeneration = 0;
+
 function extensionFor(track: Track, quality: DownloadQuality): string {
   if (quality === 'opus') return 'opus';
   if (quality === 'mp3') return 'mp3';
@@ -177,7 +186,24 @@ export const useOfflineStore = create<OfflineState>()(
         if (pendingTracks.length === 0) return;
         const entries = pendingTracks;
         pendingTracks = [];
-        set((state) => ({ index: addDownloadedTracks(state.index, entries) }));
+        const completed = new Set(entries.map((entry) => entry.track.id));
+        set((state) => {
+          // `index.tracks` is the source of truth for completed downloads.
+          // Keeping `'done'` entries in `downloads` retained every Track twice
+          // and made `pump()` scan the whole session history on completion.
+          let downloads = state.downloads;
+          let pruned = false;
+          for (const trackId of completed) {
+            if (downloads[trackId]?.status !== 'done') continue;
+            if (!pruned) {
+              downloads = { ...downloads };
+              pruned = true;
+            }
+            delete downloads[trackId];
+          }
+          const index = addDownloadedTracks(state.index, entries);
+          return pruned ? { index, downloads } : { index };
+        });
       };
 
       const queueDownloadedTrack = (entry: DownloadedTrackInput) => {
@@ -255,6 +281,55 @@ export const useOfflineStore = create<OfflineState>()(
         });
       };
 
+      const isDownloadLive = (
+        trackId: string,
+        task: OfflineDownloadTask,
+        generation: number,
+      ): boolean =>
+        generation === downloadGeneration &&
+        !cancelledIds.has(trackId) &&
+        tasks.get(trackId) === task;
+
+      /**
+       * Remove every trace of a download whose task settled after it was
+       * cancelled, removed or cleared. A replacement task may already own the
+       * destination path, so the file is only deleted when no newer task exists.
+       */
+      const discardDownload = async (
+        trackId: string,
+        extension: string,
+        task: OfflineDownloadTask,
+        generation: number,
+        uri?: string,
+      ) => {
+        const replaced = tasks.has(trackId) && tasks.get(trackId) !== task;
+        cancelledIds.delete(trackId);
+        if (replaced) return;
+        if (
+          generation !== downloadGeneration &&
+          (get().index.tracks[trackId] || get().downloads[trackId])
+        ) {
+          // `clearAll()` reset the store and a newer download owns the track.
+          return;
+        }
+        dropPendingTracks(new Set([trackId]));
+        await offlineFiles.remove(trackId, extension, uri).catch(() => undefined);
+        speedSamples.delete(trackId);
+        useDownloadProgressStore.getState().clear(trackId);
+        set((state) => {
+          let downloads = state.downloads;
+          let pruned = false;
+          if (downloads[trackId]?.status === 'done') {
+            downloads = { ...downloads };
+            delete downloads[trackId];
+            pruned = true;
+          }
+          const index = removeDownloadedTrack(state.index, trackId);
+          if (!pruned && index === state.index) return state;
+          return pruned ? { downloads, index } : { index };
+        });
+      };
+
       const startOne = (next: DownloadEntry): boolean => {
         const server = useAuthStore.getState().server;
         if (!server) {
@@ -265,6 +340,7 @@ export const useOfflineStore = create<OfflineState>()(
         const track = next.track;
         const quality = next.quality ?? useSettingsStore.getState().downloadQuality;
         const extension = extensionFor(track, quality);
+        const generation = downloadGeneration;
         const task = offlineFiles.createDownload({
           url: buildDownloadUrl(server, track.id, downloadOptions(quality)),
           trackId: track.id,
@@ -281,7 +357,15 @@ export const useOfflineStore = create<OfflineState>()(
           .start()
           .then(async (file) => {
             if (!file) {
+              if (!isDownloadLive(track.id, task, generation)) {
+                await discardDownload(track.id, extension, task, generation);
+                return;
+              }
               setStatus(set, track.id, 'paused');
+              return;
+            }
+            if (!isDownloadLive(track.id, task, generation)) {
+              await discardDownload(track.id, extension, task, generation, file.uri);
               return;
             }
             const integrity = downloadSizeError(track.size, file.size, quality === 'original');
@@ -312,15 +396,25 @@ export const useOfflineStore = create<OfflineState>()(
             }));
             queueDownloadedTrack(stored);
             await rememberManifest(track.id, stored);
+            // The task can be cancelled or the whole store cleared while the
+            // manifest is written; never let it resurrect the entry.
+            if (!isDownloadLive(track.id, task, generation)) {
+              await discardDownload(track.id, extension, task, generation, file.uri);
+              return;
+            }
             void ensureCover(track.coverArt);
           })
-          .catch((error) => {
+          .catch(async (error) => {
+            if (!isDownloadLive(track.id, task, generation)) {
+              await discardDownload(track.id, extension, task, generation);
+              return;
+            }
             const message = error instanceof Error ? error.message : 'Download failed';
             logger.warn('Download failed', { trackId: track.id, message });
             setStatus(set, track.id, 'error', 0, message);
           })
           .finally(() => {
-            tasks.delete(track.id);
+            if (tasks.get(track.id) === task) tasks.delete(track.id);
             set((state) => ({ active: Math.max(0, state.active - 1) }));
             pump();
           });
@@ -344,6 +438,9 @@ export const useOfflineStore = create<OfflineState>()(
         set((state) => {
           const downloads = { ...state.downloads };
           for (const track of tracks) {
+            // A fresh request re-arms a track that was cancelled before its
+            // task could settle.
+            cancelledIds.delete(track.id);
             if (isDownloaded(state.index, track.id)) continue;
             const existing = downloads[track.id];
             if (existing && existing.status !== 'error') continue;
@@ -548,12 +645,14 @@ export const useOfflineStore = create<OfflineState>()(
           for (const trackId of plan.removedTrackIds) {
             const task = tasks.get(trackId);
             if (task) {
+              cancelledIds.add(trackId);
               task.cancel();
               tasks.delete(trackId);
             }
             speedSamples.delete(trackId);
             useDownloadProgressStore.getState().clear(trackId);
           }
+          dropPendingTracks(new Set(plan.removedTrackIds));
 
           set((state) => {
             const downloads = { ...state.downloads };
@@ -595,22 +694,37 @@ export const useOfflineStore = create<OfflineState>()(
         resume: (trackId) => {
           const task = tasks.get(trackId);
           if (!task) {
+            cancelledIds.delete(trackId);
             setStatus(set, trackId, 'queued', 0);
             pump();
             return;
           }
+          const generation = downloadGeneration;
+          const pendingEntry = get().downloads[trackId];
+          const extension = pendingEntry
+            ? extensionFor(
+                pendingEntry.track,
+                pendingEntry.quality ?? useSettingsStore.getState().downloadQuality,
+              )
+            : 'bin';
           setStatus(set, trackId, 'downloading');
           void task
             .resume()
             .then(async (file) => {
+              const entry = get().downloads[trackId];
               if (!file) {
+                if (!entry || !isDownloadLive(trackId, task, generation)) {
+                  await discardDownload(trackId, extension, task, generation);
+                  return;
+                }
                 setStatus(set, trackId, 'paused');
                 return;
               }
-              const entry = get().downloads[trackId];
-              if (!entry) return;
+              if (!entry || !isDownloadLive(trackId, task, generation)) {
+                await discardDownload(trackId, extension, task, generation, file.uri);
+                return;
+              }
               const quality = entry.quality ?? useSettingsStore.getState().downloadQuality;
-              const extension = extensionFor(entry.track, quality);
               const integrity = downloadSizeError(
                 entry.track.size,
                 file.size,
@@ -643,18 +757,38 @@ export const useOfflineStore = create<OfflineState>()(
               }));
               queueDownloadedTrack(stored);
               await rememberManifest(trackId, stored);
+              if (!isDownloadLive(trackId, task, generation)) {
+                await discardDownload(trackId, extension, task, generation, file.uri);
+                return;
+              }
               void ensureCover(entry.track.coverArt);
             })
-            .catch((error) => {
+            .catch(async (error) => {
+              if (!isDownloadLive(trackId, task, generation)) {
+                await discardDownload(trackId, extension, task, generation);
+                return;
+              }
               setStatus(set, trackId, 'error', 0, error instanceof Error ? error.message : 'Download failed');
             });
         },
 
         cancel: (trackId) => {
-          tasks.get(trackId)?.cancel();
-          tasks.delete(trackId);
+          const task = tasks.get(trackId);
+          if (task) {
+            cancelledIds.add(trackId);
+            task.cancel();
+            tasks.delete(trackId);
+          }
+          dropPendingTracks(new Set([trackId]));
           speedSamples.delete(trackId);
           useDownloadProgressStore.getState().clear(trackId);
+          const entry = get().downloads[trackId];
+          if (entry) {
+            const quality = entry.quality ?? useSettingsStore.getState().downloadQuality;
+            void offlineFiles
+              .remove(trackId, extensionFor(entry.track, quality))
+              .catch(() => undefined);
+          }
           set((state) => {
             const downloads = { ...state.downloads };
             delete downloads[trackId];
@@ -663,57 +797,110 @@ export const useOfflineStore = create<OfflineState>()(
         },
 
         removeTrack: async (trackId) => {
+          const task = tasks.get(trackId);
+          if (task) {
+            cancelledIds.add(trackId);
+            task.cancel();
+            tasks.delete(trackId);
+          }
           dropPendingTracks(new Set([trackId]));
           const entry = get().index.tracks[trackId];
-          if (entry) await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+          const queued = entry ? undefined : get().downloads[trackId];
+          if (entry) {
+            await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+          } else if (queued) {
+            const quality = queued.quality ?? useSettingsStore.getState().downloadQuality;
+            await offlineFiles
+              .remove(trackId, extensionFor(queued.track, quality))
+              .catch(() => undefined);
+          }
           useDownloadProgressStore.getState().clear(trackId);
           set((state) => {
             const downloads = { ...state.downloads };
             delete downloads[trackId];
             return { index: removeDownloadedTrack(state.index, trackId), downloads };
           });
-          await pruneCover(entry?.track.coverArt);
+          await pruneCover(entry?.track.coverArt ?? queued?.track.coverArt);
         },
 
         removeCollection: async (collectionId) => {
-          const collection = get().index.collections[collectionId];
+          const current = get().index;
+          const collection = current.collections[collectionId];
           if (!collection) return;
-          dropPendingTracks(new Set(collection.trackIds));
-          const nextIndex = removeCollectionFromIndex(get().index, collectionId);
-          for (const trackId of collection.trackIds) {
-            if (!nextIndex.tracks[trackId]) {
-              const entry = get().index.tracks[trackId];
-              if (entry) await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
-              useDownloadProgressStore.getState().clear(trackId);
+          const nextIndex = removeCollectionFromIndex(current, collectionId);
+          // A shared or in-flight track may not be in `index.tracks` yet but is
+          // still wanted by another collection; only cancel truly orphaned
+          // downloads.
+          const stillUsed = new Set(
+            Object.values(nextIndex.collections).flatMap((entry) => entry.trackIds),
+          );
+          const removedTrackIds = collection.trackIds.filter(
+            (trackId) => !nextIndex.tracks[trackId] && !stillUsed.has(trackId),
+          );
+          dropPendingTracks(new Set(removedTrackIds));
+          // Capture covers before the index changes; resolving them afterwards
+          // always found `undefined` and orphaned the files on disk.
+          const coverIds: (string | undefined)[] = [collection.coverArt];
+          for (const trackId of removedTrackIds) {
+            const task = tasks.get(trackId);
+            if (task) {
+              cancelledIds.add(trackId);
+              task.cancel();
+              tasks.delete(trackId);
             }
-          }
-          set((state) => {
-            const downloads = { ...state.downloads };
-            for (const trackId of collection.trackIds) {
-              if (!nextIndex.tracks[trackId]) delete downloads[trackId];
+            const entry = current.tracks[trackId];
+            const queued = entry ? undefined : get().downloads[trackId];
+            coverIds.push(entry?.track.coverArt ?? queued?.track.coverArt);
+            if (entry) {
+              await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+            } else if (queued) {
+              const quality = queued.quality ?? useSettingsStore.getState().downloadQuality;
+              await offlineFiles
+                .remove(trackId, extensionFor(queued.track, quality))
+                .catch(() => undefined);
             }
-            return { index: nextIndex, downloads };
-          });
-          await pruneCovers([
-            collection.coverArt,
-            ...collection.trackIds.map((trackId) => get().index.tracks[trackId]?.track.coverArt),
-          ]);
-        },
-
-        removeCollectionTrack: async (collectionId, trackId) => {
-          dropPendingTracks(new Set([trackId]));
-          const entry = get().index.tracks[trackId];
-          const nextIndex = removeCollectionTrack(get().index, collectionId, trackId);
-          if (entry && !nextIndex.tracks[trackId]) {
-            await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
             useDownloadProgressStore.getState().clear(trackId);
           }
           set((state) => {
             const downloads = { ...state.downloads };
-            if (!nextIndex.tracks[trackId]) delete downloads[trackId];
+            for (const trackId of removedTrackIds) delete downloads[trackId];
             return { index: nextIndex, downloads };
           });
-          if (!nextIndex.tracks[trackId]) await pruneCover(entry?.track.coverArt);
+          await pruneCovers(coverIds);
+        },
+
+        removeCollectionTrack: async (collectionId, trackId) => {
+          const entry = get().index.tracks[trackId];
+          const nextIndex = removeCollectionTrack(get().index, collectionId, trackId);
+          const stillUsed = Object.values(nextIndex.collections).some((collection) =>
+            collection.trackIds.includes(trackId),
+          );
+          const removed = !nextIndex.tracks[trackId] && !stillUsed;
+          const queued = removed && !entry ? get().downloads[trackId] : undefined;
+          if (removed) {
+            dropPendingTracks(new Set([trackId]));
+            const task = tasks.get(trackId);
+            if (task) {
+              cancelledIds.add(trackId);
+              task.cancel();
+              tasks.delete(trackId);
+            }
+            if (entry) {
+              await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+            } else if (queued) {
+              const quality = queued.quality ?? useSettingsStore.getState().downloadQuality;
+              await offlineFiles
+                .remove(trackId, extensionFor(queued.track, quality))
+                .catch(() => undefined);
+            }
+            useDownloadProgressStore.getState().clear(trackId);
+          }
+          set((state) => {
+            const downloads = { ...state.downloads };
+            if (removed) delete downloads[trackId];
+            return { index: nextIndex, downloads };
+          });
+          if (removed) await pruneCover(entry?.track.coverArt ?? queued?.track.coverArt);
         },
 
         freeUpSpace: async (keepTrackIds = new Set()) => {
@@ -750,14 +937,28 @@ export const useOfflineStore = create<OfflineState>()(
             flushTimer = null;
           }
           pendingTracks = [];
-          for (const [trackId, entry] of Object.entries(get().index.tracks)) {
-            await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
-          }
-          for (const coverArt of Object.keys(get().index.covers ?? {})) {
-            await offlineFiles.removeCover(coverArt);
-          }
+          // Invalidate every in-flight completion before cancelling the tasks:
+          // a task that already resolved must not touch the reset index.
+          downloadGeneration += 1;
+          cancelledIds.clear();
+          const downloads = get().downloads;
           tasks.forEach((task) => task.cancel());
           tasks.clear();
+          speedSamples.clear();
+          const index = get().index;
+          for (const [trackId, entry] of Object.entries(index.tracks)) {
+            await offlineFiles.remove(trackId, entry.extension, entry.fileUri);
+          }
+          for (const coverArt of Object.keys(index.covers ?? {})) {
+            await offlineFiles.removeCover(coverArt);
+          }
+          for (const [trackId, entry] of Object.entries(downloads)) {
+            if (index.tracks[trackId]) continue;
+            const quality = entry.quality ?? useSettingsStore.getState().downloadQuality;
+            await offlineFiles
+              .remove(trackId, extensionFor(entry.track, quality))
+              .catch(() => undefined);
+          }
           await offlineFiles.clearManifests();
           useDownloadProgressStore.getState().clearAll();
           set({ index: emptyOfflineIndex(), downloads: {}, active: 0 });

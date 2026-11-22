@@ -19,6 +19,8 @@ function safeName(trackId: string, extension: string): string {
 const COVER_RECOMPRESS_BYTES = 120_000;
 /** Visually lossless for artwork; do not lower without a visual check. */
 const COVER_JPEG_QUALITY = 0.9;
+/** Sidecars parsed in parallel; more exhausts file descriptors at 20k tracks. */
+const MANIFEST_BATCH = 32;
 
 const downloads = new Directory(Paths.document, 'laila-downloads');
 const covers = new Directory(Paths.document, 'laila-covers');
@@ -210,18 +212,27 @@ export class NativeOfflineFiles implements OfflineFiles {
     const files = manifests
       .list()
       .filter((entry): entry is File => entry instanceof File && entry.name.endsWith('.json'));
-    const entries = await Promise.all(
-      files.map(async (file) => {
-        try {
-          const parsed = JSON.parse(await file.text()) as OfflineTrack;
-          if (!parsed?.track?.id || !parsed.extension || !parsed.fileUri) return null;
-          return parsed;
-        } catch {
-          return null;
-        }
-      }),
-    );
-    return entries.filter((entry): entry is OfflineTrack => entry !== null);
+    // Opening thousands of sidecars with one Promise.all exhausted file
+    // descriptors on large libraries; keep a small window in flight.
+    const parsed: OfflineTrack[] = [];
+    for (let i = 0; i < files.length; i += MANIFEST_BATCH) {
+      const slice = files.slice(i, i + MANIFEST_BATCH);
+      const entries = await Promise.all(
+        slice.map(async (file) => {
+          try {
+            const entry = JSON.parse(await file.text()) as OfflineTrack;
+            if (!entry?.track?.id || !entry.extension || !entry.fileUri) return null;
+            return entry;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const entry of entries) {
+        if (entry) parsed.push(entry);
+      }
+    }
+    return parsed;
   }
 
   async removeManifest(trackId: string): Promise<void> {

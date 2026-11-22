@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { memo } from 'react';
 import { ChevronRight } from '@/ui/icons';
 import { StyleSheet, View } from 'react-native';
 import type { Artist } from '@/core/models';
@@ -7,7 +8,7 @@ import { Artwork } from '@/ui/Artwork';
 import { PressableScale } from '@/ui/PressableScale';
 import { Text } from '@/ui/Text';
 
-export function ArtistRow({ artist }: { artist: Artist }) {
+export const ArtistRow = memo(function ArtistRow({ artist }: { artist: Artist }) {
   const theme = useTheme();
   const router = useRouter();
   return (
@@ -29,7 +30,7 @@ export function ArtistRow({ artist }: { artist: Artist }) {
       <ChevronRight size={18} color={theme.colors.textTertiary} />
     </PressableScale>
   );
-}
+});
 
 const styles = StyleSheet.create({
   row: {

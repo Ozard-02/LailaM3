@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { Playlist } from '@/core/models';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -7,7 +8,13 @@ import { PressableScale } from '@/ui/PressableScale';
 import { Text } from '@/ui/Text';
 import { trackCount } from '@/utils/format';
 
-export function PlaylistCard({ playlist, width = 158 }: { playlist: Playlist; width?: number }) {
+export const PlaylistCard = memo(function PlaylistCard({
+  playlist,
+  width = 158,
+}: {
+  playlist: Playlist;
+  width?: number;
+}) {
   const theme = useTheme();
   const router = useRouter();
   return (
@@ -28,7 +35,7 @@ export function PlaylistCard({ playlist, width = 158 }: { playlist: Playlist; wi
       </View>
     </PressableScale>
   );
-}
+});
 
 const styles = StyleSheet.create({
   art: {

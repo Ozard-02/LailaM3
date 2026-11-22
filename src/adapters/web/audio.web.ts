@@ -1,3 +1,4 @@
+import { resolveDuration } from '@/core/audio/duration';
 import { safeSeekTime } from '@/core/audio/seek';
 import type {
   AudioEngine,
@@ -11,6 +12,7 @@ export class WebAudioEngine implements AudioEngine {
   private readonly element: HTMLAudioElement;
   private listeners = new Set<AudioListener>();
   private lastError: string | undefined;
+  private durationHint: number | undefined;
   private disposed = false;
 
   constructor() {
@@ -50,7 +52,7 @@ export class WebAudioEngine implements AudioEngine {
   }
 
   private snapshot(): AudioState {
-    const duration = Number.isFinite(this.element.duration) ? this.element.duration : 0;
+    const duration = resolveDuration(this.element.duration, this.durationHint);
     const rawBuffered = this.element.buffered.length
       ? this.element.buffered.end(this.element.buffered.length - 1)
       : 0;
@@ -73,6 +75,7 @@ export class WebAudioEngine implements AudioEngine {
 
   async load(source: AudioSource): Promise<void> {
     this.lastError = undefined;
+    this.durationHint = source.duration;
     this.element.src = source.url;
     this.element.load();
     this.emit();
@@ -97,7 +100,10 @@ export class WebAudioEngine implements AudioEngine {
     // A non-finite value must never reach currentTime: the setter throws and
     // the play/seek path aborts.
     if (!Number.isFinite(position)) return;
-    const target = safeSeekTime(position, this.element.duration);
+    const target = safeSeekTime(
+      position,
+      resolveDuration(this.element.duration, this.durationHint),
+    );
     try {
       this.element.currentTime = target;
     } catch {
@@ -123,6 +129,7 @@ export class WebAudioEngine implements AudioEngine {
 
   async destroy(): Promise<void> {
     this.disposed = true;
+    this.durationHint = undefined;
     this.listeners.clear();
     this.element.pause();
     this.element.removeAttribute('src');

@@ -7,7 +7,7 @@ import {
   SkipBack,
   SkipForward,
 } from '@/ui/icons';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -172,7 +172,12 @@ function LyricsBody({
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const position = usePlayerStore((state) => state.position);
+  // Selecting the active index directly keeps LyricsBody from re-rendering
+  // (and re-mapping every line) on each position tick; it only updates when
+  // the highlighted line actually changes.
+  const active = usePlayerStore((state) =>
+    data.synced ? activeLineIndex(data.lines, state.position) : -1,
+  );
   const seek = usePlayerStore((state) => state.seek);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   // Heights only: positions are recomputed from them, so a padding change or a
@@ -188,11 +193,6 @@ function LyricsBody({
     paddingTop,
     insets.bottom + (landscape ? 24 : 140),
   );
-
-  const active = useMemo(() => {
-    if (!data.synced) return -1;
-    return activeLineIndex(data.lines, position);
-  }, [data, position]);
 
   const seekToLine = useCallback(
     (start: number) => {

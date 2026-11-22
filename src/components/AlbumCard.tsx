@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { Album } from '@/core/models';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -6,7 +7,13 @@ import { Artwork } from '@/ui/Artwork';
 import { PressableScale } from '@/ui/PressableScale';
 import { Text } from '@/ui/Text';
 
-export function AlbumCard({ album, width }: { album: Album; width?: number }) {
+export const AlbumCard = memo(function AlbumCard({
+  album,
+  width,
+}: {
+  album: Album;
+  width?: number;
+}) {
   const theme = useTheme();
   const router = useRouter();
   return (
@@ -28,7 +35,7 @@ export function AlbumCard({ album, width }: { album: Album; width?: number }) {
       </View>
     </PressableScale>
   );
-}
+});
 
 const styles = StyleSheet.create({
   base: {

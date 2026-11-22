@@ -32,8 +32,8 @@ export function PlayerBridge() {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const unregister = audioEngine.setAutoAdvanceHandler?.((mediaId) => {
-      usePlayerStore.getState()._handleAutoAdvance(mediaId);
+    const unregister = audioEngine.setAutoAdvanceHandler?.((transition) => {
+      return usePlayerStore.getState()._handleAutoAdvance(transition);
     });
     return unregister;
   }, []);

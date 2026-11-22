@@ -5,6 +5,7 @@ import type { Album, Track } from '@/core/models';
 import {
   applyTrackPatches,
   currentTrack as selectCurrentTrack,
+  effectiveQueue,
   emptyQueue,
   queueReducer,
   shuffled,
@@ -23,6 +24,7 @@ import {
 } from '@/core/dlna/control';
 import type { DlnaRenderer } from '@/core/dlna/types';
 import { safeSeekTime } from '@/core/audio/seek';
+import { resolveDuration } from '@/core/audio/duration';
 import { filterExcludedSongs } from '@/core/exclusions';
 import { downloadedTracks, FAVOURITES_COLLECTION, nextDownloadedIndex } from '@/core/offline';
 import { queryKeys, serverKey } from '@/core/queryKeys';
@@ -41,6 +43,7 @@ import {
   type TrashUndoResult,
 } from '@/core/trash';
 import { logger } from '@/core/utils/logger';
+import type { AutoAdvanceDecision, AutoAdvanceTransition } from '@/ports/audio';
 import { audioEngine } from '@/services/audio';
 import {
   ensureExcludedSongIds,
@@ -51,7 +54,7 @@ import {
 import { appStore } from '@/services/appStorage';
 import { invalidatePlaylistQueries, queryClient } from '@/services/query';
 import { isServerUsable, useAuthStore } from './auth';
-import { markPlay, submitScrobble } from './player/session';
+import { clearLastPlay, markPlay, submitScrobble } from './player/session';
 import { sourceFor } from './player/sources';
 import { isOfflineNow, useOfflineStore } from './offline';
 import { useSettingsStore } from './settings';
@@ -121,7 +124,9 @@ export interface PlayerState {
     buffered: number;
     error?: string;
   }) => void;
-  _handleAutoAdvance: (mediaId?: string) => void;
+  _handleAutoAdvance: (
+    transition?: AutoAdvanceTransition | string,
+  ) => AutoAdvanceDecision;
 }
 
 type PlayerPersisted = { queueState: QueueState; volume: number };
@@ -262,7 +267,11 @@ export const usePlayerStore = create<PlayerState>()(
         const cast = get().castTarget;
         if (cast) {
           try {
-            set({ status: 'loading', error: null });
+            set({
+              status: 'loading',
+              duration: resolveDuration(0, track.duration),
+              error: null,
+            });
             const source = sourceFor(track, { remote: true });
             await dlnaPlaySource(cast, source);
             markPlay(track);
@@ -284,10 +293,19 @@ export const usePlayerStore = create<PlayerState>()(
           return;
         }
         try {
-          set({ status: 'loading', error: null });
+          set({
+            status: 'loading',
+            duration: resolveDuration(0, track.duration),
+            error: null,
+          });
           const queueState = get().queueState;
+          const effective = effectiveQueue(queueState);
           if (audioEngine.setQueue) {
-            await audioEngine.setQueue(queueState.queue.map((item) => sourceFor(item)), queueState.index);
+            await audioEngine.setQueue(
+              effective.tracks.map((item) => sourceFor(item)),
+              effective.index,
+            );
+            await audioEngine.setRepeatMode?.(queueState.repeat);
           } else {
             await audioEngine.load(sourceFor(track));
           }
@@ -298,6 +316,28 @@ export const usePlayerStore = create<PlayerState>()(
           logger.error('Could not load track', { message });
           set({ status: 'error', error: message });
         }
+      };
+
+      const syncNativeRepeat = () => {
+        if (get().castTarget) return;
+        void audioEngine.setRepeatMode?.(get().queueState.repeat).catch(() => undefined);
+      };
+
+      /**
+       * Mirror the effective queue (queue with Up Next) onto the native
+       * player without reloading the active item. Skipped while casting and
+       * before the first load, when there is no native queue to align yet.
+       */
+      const syncNativeQueue = () => {
+        if (get().castTarget || !audioEngine.syncQueue || get().status === 'idle') return;
+        const effective = effectiveQueue(get().queueState);
+        if (effective.tracks.length === 0 || effective.index < 0) return;
+        void audioEngine
+          .syncQueue(
+            effective.tracks.map((item) => sourceFor(item)),
+            effective.index,
+          )
+          .catch((error) => logger.warn('Could not sync native queue', { error }));
       };
 
       /**
@@ -360,6 +400,7 @@ export const usePlayerStore = create<PlayerState>()(
                 tracks: fresh,
               }),
             }));
+            syncNativeQueue();
             return true;
           } catch (error) {
             logger.warn('Radio top-up failed', { error });
@@ -384,8 +425,37 @@ export const usePlayerStore = create<PlayerState>()(
           action.type === 'jump'
         ) {
           if (after) {
+            // The native queue already mirrors the effective queue, so a
+            // manual skip can move within it instead of rebuilding it and
+            // restarting the current item.
+            if (
+              (action.type === 'next' ||
+                action.type === 'previous' ||
+                action.type === 'jump') &&
+              !get().castTarget &&
+              get().status !== 'idle' &&
+              audioEngine.skipToIndex &&
+              (!isOfflineNow() || Boolean(useOfflineStore.getState().localUri(after.id)))
+            ) {
+              const effective = effectiveQueue(nextState);
+              const skipped = await audioEngine.skipToIndex(effective.index, after.id);
+              if (skipped) {
+                markPlay(after);
+                set({
+                  status: 'playing',
+                  position: 0,
+                  duration: resolveDuration(0, after.duration),
+                  error: null,
+                });
+                syncNativeQueue();
+                return;
+              }
+            }
             await loadCurrent();
           } else {
+            // The last track of the queue just finished; report it before the
+            // player goes idle.
+            submitScrobble();
             const cast = get().castTarget;
             if (cast) {
               stopCastPolling();
@@ -402,11 +472,6 @@ export const usePlayerStore = create<PlayerState>()(
         }
       };
 
-      /**
-       * Removes one track from the library: adds it to the Trash playlist,
-       * deletes the local copy and the favourite, and drops it from the queue.
-       * Queue rows call it with their position; library rows with the track.
-       */
       const trashOne = async (track: Track, skipCurrent: boolean): Promise<TrashOutcome> => {
         const state = get().queueState;
 
@@ -456,7 +521,7 @@ export const usePlayerStore = create<PlayerState>()(
         // current track and paused the one `next()` had just started.
         // Positions are read after the skip so an Up next insertion is
         // already reflected; highest first keeps the other indexes valid.
-        const enginePositions = get().queueState.queue.reduce<number[]>(
+        const enginePositions = effectiveQueue(get().queueState).tracks.reduce<number[]>(
           (positions, item, position) => {
             if (item.id === track.id) positions.push(position);
             return positions;
@@ -614,10 +679,12 @@ export const usePlayerStore = create<PlayerState>()(
             const shouldPlay = state.status === 'playing';
             try {
               if (audioEngine.setQueue) {
+                const effective = effectiveQueue(state.queueState);
                 await audioEngine.setQueue(
-                  state.queueState.queue.map((item) => sourceFor(item)),
-                  state.queueState.index,
+                  effective.tracks.map((item) => sourceFor(item)),
+                  effective.index,
                 );
+                await audioEngine.setRepeatMode?.(state.queueState.repeat);
               } else {
                 await audioEngine.load(sourceFor(track));
               }
@@ -764,6 +831,7 @@ export const usePlayerStore = create<PlayerState>()(
           } catch {
             // Keep the queue; the engine may be between tracks.
           }
+          clearLastPlay();
           set({ status: 'idle', position: 0, error: null });
         },
 
@@ -824,14 +892,43 @@ export const usePlayerStore = create<PlayerState>()(
           const action: QueueAction =
             mode === 'next' ? { type: 'playNext', tracks: playable } : { type: 'enqueue', tracks: playable };
           set({ queueState: queueReducer(get().queueState, action) });
+          syncNativeQueue();
         },
 
         moveToUpNext: (index) => {
           set({ queueState: queueReducer(get().queueState, { type: 'moveToUpNext', index }) });
+          syncNativeQueue();
         },
 
         removeAt: (index) => {
-          set({ queueState: queueReducer(get().queueState, { type: 'remove', index }) });
+          const beforeState = get().queueState;
+          const removingCurrent = index === beforeState.index;
+          const removedTrack = beforeState.queue[index];
+          const nextState = queueReducer(beforeState, { type: 'remove', index });
+          const after = selectCurrentTrack(nextState);
+          set({ queueState: nextState });
+
+          if (!after) {
+            const cast = get().castTarget;
+            if (cast) {
+              stopCastPolling();
+              set({ castTarget: null });
+              void dlnaStop(cast).catch(() => undefined);
+            }
+            void audioEngine.pause();
+            clearLastPlay();
+            set({ status: 'idle', position: 0, duration: 0, buffered: 0 });
+          } else if (removingCurrent) {
+            void loadCurrent();
+          } else if (audioEngine.syncQueue) {
+            syncNativeQueue();
+          } else if (
+            audioEngine.removeQueueItem &&
+            removedTrack &&
+            beforeState.upNext.length === 0
+          ) {
+            void audioEngine.removeQueueItem(index, removedTrack.id);
+          }
         },
 
         // Library rows have no queue position; both paths share `trashOne`.
@@ -905,7 +1002,9 @@ export const usePlayerStore = create<PlayerState>()(
             addedTrackIds,
           );
           const removals: { position: number; id: string }[] = [];
-          baseState.queue.forEach((item, position) => {
+          // Positions are native-queue positions: Up Next is spliced after the
+          // current track, matching what `loadCurrent`/`syncQueue` wrote.
+          effectiveQueue(baseState).tracks.forEach((item, position) => {
             if (trackIdSet.has(item.id)) removals.push({ position, id: item.id });
           });
           const nextState = removeTracksEverywhere(baseState, trackIds);
@@ -1016,6 +1115,7 @@ export const usePlayerStore = create<PlayerState>()(
           set((current) => ({
             queueState: restoreTracksEverywhere(current.queueState, undo),
           }));
+          syncNativeQueue();
           return { ok: true, warning };
         },
 
@@ -1045,15 +1145,18 @@ export const usePlayerStore = create<PlayerState>()(
           set((current) => ({
             queueState: restoreTrackEverywhere(current.queueState, undo),
           }));
+          syncNativeQueue();
           return { ok: true, warning };
         },
 
         move: (from, to) => {
           set({ queueState: queueReducer(get().queueState, { type: 'move', from, to }) });
+          syncNativeQueue();
         },
 
         reorder: (tracks) => {
           set({ queueState: queueReducer(get().queueState, { type: 'reorder', queue: tracks }) });
+          syncNativeQueue();
         },
 
         applyRemoteQueue: async (transfer, play) => {
@@ -1074,7 +1177,12 @@ export const usePlayerStore = create<PlayerState>()(
           const seconds = Math.max(0, transfer.positionMs / 1000);
           try {
             if (audioEngine.setQueue) {
-              await audioEngine.setQueue(queueState.queue.map((item) => sourceFor(item)), queueState.index);
+              const effective = effectiveQueue(queueState);
+              await audioEngine.setQueue(
+                effective.tracks.map((item) => sourceFor(item)),
+                effective.index,
+              );
+              await audioEngine.setRepeatMode?.(queueState.repeat);
             } else {
               await audioEngine.load(sourceFor(current));
             }
@@ -1086,6 +1194,7 @@ export const usePlayerStore = create<PlayerState>()(
               position: seconds,
               seekRevision: state.seekRevision + 1,
               status: play ? 'playing' : 'paused',
+              duration: resolveDuration(get().duration, current.duration),
               error: null,
             }));
           } catch (error) {
@@ -1104,6 +1213,12 @@ export const usePlayerStore = create<PlayerState>()(
             void dlnaStop(cast).catch(() => undefined);
           }
           void audioEngine.pause();
+          // Drop the native queue too, so the notification and media session
+          // do not keep advertising a queue that Laila has already cleared.
+          if (audioEngine.syncQueue) {
+            void audioEngine.syncQueue([], -1).catch(() => undefined);
+          }
+          clearLastPlay();
           set({
             queueState: queueReducer(get().queueState, { type: 'clear' }),
             status: 'idle',
@@ -1116,54 +1231,134 @@ export const usePlayerStore = create<PlayerState>()(
           const order: RepeatMode[] = ['off', 'all', 'one'];
           const next = order[(order.indexOf(current) + 1) % order.length] ?? 'off';
           set({ queueState: queueReducer(get().queueState, { type: 'setRepeat', repeat: next }) });
+          syncNativeRepeat();
         },
 
         toggleShuffle: () => {
           set({ queueState: queueReducer(get().queueState, { type: 'toggleShuffle' }) });
+          syncNativeQueue();
         },
 
         _apply: apply,
 
         _topUpRadio: topUpRadio,
 
-        _handleAutoAdvance: (mediaId) => {
+        _handleAutoAdvance: (transition) => {
+          const {
+            mediaId,
+            index: nativeIndex,
+            reason = 'auto',
+          } =
+            typeof transition === 'string' || transition === undefined
+              ? { mediaId: transition }
+              : transition;
           const state = get().queueState;
+
+          if (
+            reason === 'repeat' ||
+            (state.repeat === 'one' &&
+              Boolean(mediaId) &&
+              selectCurrentTrack(state)?.id === mediaId)
+          ) {
+            // Media3 looped the same item (repeat one) or already restarted it.
+            const current = selectCurrentTrack(state);
+            if (!current || (mediaId && current.id !== mediaId)) {
+              void apply({ type: 'advance' });
+              return 'takeover';
+            }
+            markPlay(current);
+            set({ position: 0 });
+            return 'keep';
+          }
+
           const nextState = queueReducer(state, { type: 'advance' });
           const nextTrack = selectCurrentTrack(nextState);
-          if (
-            mediaId &&
-            nextTrack?.id === mediaId &&
-            state.repeat !== 'one' &&
-            state.upNext.length === 0 &&
-            (!isOfflineNow() || Boolean(useOfflineStore.getState().localUri(nextTrack.id)))
-          ) {
-            // Native playback is already on the right track; just move the UI
-            // and scrobble without reloading the source (keeps it gapless).
-            set({ queueState: nextState });
-            markPlay(nextTrack);
-            void audioEngine.play();
-            return;
+          const effectiveNext = effectiveQueue(nextState);
+
+          if (reason === 'auto') {
+            if (
+              mediaId &&
+              nextTrack &&
+              nextTrack.id === mediaId &&
+              state.repeat !== 'one' &&
+              (nativeIndex === undefined || nativeIndex === effectiveNext.index) &&
+              (!isOfflineNow() || Boolean(useOfflineStore.getState().localUri(nextTrack.id)))
+            ) {
+              // Native playback already moved to the right track. Adopt it:
+              // no pause, no play, no reload, so Media3 keeps running without
+              // the audible gap of a takeover.
+              set({
+                queueState: nextState,
+                position: 0,
+                duration: resolveDuration(0, nextTrack.duration),
+              });
+              markPlay(nextTrack);
+              if (
+                get().radioMode &&
+                nextState.queue.length - nextState.index <= RADIO_LOW_WATER
+              ) {
+                void topUpRadio();
+              }
+              return 'keep';
+            }
           }
-          void apply({ type: 'advance' });
+
+          if (
+            !nextTrack &&
+            !isOfflineNow() &&
+            (get().radioMode || useSettingsStore.getState().continueWithRadio)
+          ) {
+            const oldLength = state.queue.length;
+            void topUpRadio().then((added) => {
+              if (added) void get().jump(oldLength);
+              else void apply({ type: 'advance' });
+            });
+          } else {
+            void apply({ type: 'advance' });
+          }
+          return 'takeover';
         },
 
         _syncFromEngine: (state) => {
           // While casting, the local engine is deliberately paused and the
           // renderer poll owns status/progress.
           if (get().castTarget) return;
-          // A Segue `stop` sets idle at position 0; the local pause/seek events
-          // that follow must not turn it back into a paused track.
-          if (get().status === 'idle' && state.status === 'paused' && state.position < 0.01) {
+          // A trailing `paused` event after a stop, clear or end-of-queue must
+          // not turn an idle/ended player back into a paused track. Before the
+          // first load, position 0 also means "nothing playing yet".
+          if (
+            (get().status === 'idle' || get().status === 'ended') &&
+            state.status === 'paused'
+          ) {
             return;
           }
-          set({
-            status: state.status,
-            position: state.position,
-            duration: state.duration,
-            buffered: state.buffered,
-            error: state.error ?? null,
-          });
-          if (state.status === 'ended') {
+          const prevStatus = get().status;
+          const snapshot = get();
+          const current = selectCurrentTrack(snapshot.queueState);
+          // Transcodes report no usable length until the decoder sees enough
+          // data; prefer the current track's metadata until then.
+          const nextDuration = resolveDuration(
+            state.duration,
+            current?.duration ?? snapshot.duration,
+          );
+          if (
+            !(
+              prevStatus === state.status &&
+              snapshot.position === state.position &&
+              snapshot.duration === nextDuration &&
+              snapshot.buffered === state.buffered &&
+              snapshot.error === (state.error ?? null)
+            )
+          ) {
+            set({
+              status: state.status,
+              position: state.position,
+              duration: nextDuration,
+              buffered: state.buffered,
+              error: state.error ?? null,
+            });
+          }
+          if (state.status === 'ended' && prevStatus !== 'ended') {
             if (isOfflineNow()) {
               void get()._apply({ type: 'advance' });
               return;

@@ -5,7 +5,12 @@ import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { getAlbum } from '@/core/subsonic/client';
 import type { Album, Playlist } from '@/core/models';
-import { downloadedTracks, offlineAlbums, offlinePlaylists } from '@/core/offline';
+import {
+  downloadedTracks,
+  offlineAlbums,
+  offlinePlaylists,
+  type OfflineIndex,
+} from '@/core/offline';
 import { shuffled } from '@/core/queue/reducer';
 import { AlbumGrid } from '@/components/AlbumGrid';
 import { AlbumRow } from '@/components/AlbumRow';
@@ -37,6 +42,9 @@ function greeting(): string {
   return 'Good evening';
 }
 
+const EMPTY_ALBUMS: Album[] = [];
+const EMPTY_PLAYLISTS: Playlist[] = [];
+
 function LoadingRows() {
   return (
     <View style={styles.loading}>
@@ -64,9 +72,23 @@ export default function HomeScreen() {
   const [starting, setStarting] = useState(false);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const offline = useEffectiveOffline();
-  const offlineIndex = useOfflineStore((state) => state.index);
-  const offlineAlbumList = useMemo(() => offlineAlbums(offlineIndex), [offlineIndex]);
-  const offlinePlaylistList = useMemo(() => offlinePlaylists(offlineIndex), [offlineIndex]);
+  // Subscribe to the slices used by the derivations, not the whole index:
+  // cover-only writes (`addCover`) must not re-run the O(N) library scans.
+  const indexTracks = useOfflineStore((state) => state.index.tracks);
+  const indexCollections = useOfflineStore((state) => state.index.collections);
+  const offlineIndex = useMemo<OfflineIndex>(
+    () => ({ version: 1, tracks: indexTracks, collections: indexCollections, covers: {} }),
+    [indexCollections, indexTracks],
+  );
+  // Online, the downloaded lists are never shown, so skip the scan entirely.
+  const offlineAlbumList = useMemo(
+    () => (offline ? offlineAlbums(offlineIndex) : EMPTY_ALBUMS),
+    [offline, offlineIndex],
+  );
+  const offlinePlaylistList = useMemo(
+    () => (offline ? offlinePlaylists(offlineIndex) : EMPTY_PLAYLISTS),
+    [offline, offlineIndex],
+  );
   const albumsData = offline ? offlineAlbumList : (recent.data ?? []);
   const newestData = offline ? offlineAlbumList : (newest.data ?? []);
   const playlistData = offline ? offlinePlaylistList : (playlists.data ?? []);

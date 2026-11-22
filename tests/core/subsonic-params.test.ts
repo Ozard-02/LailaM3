@@ -63,9 +63,22 @@ describe('subsonic params', () => {
   it('builds cover and stream URLs', () => {
     expect(buildCoverUrl(apiKeyServer, 'cover1', 300)).toContain('getCoverArt.view');
     expect(buildCoverUrl(apiKeyServer, 'cover1', 300)).toContain('size=300');
-    const stream = buildStreamUrl(apiKeyServer, 'track1');
-    expect(stream).toContain('stream.view');
-    expect(stream).toContain('format=raw');
+    const stream = new URL(buildStreamUrl(apiKeyServer, 'track1'));
+    expect(stream.pathname).toBe('/rest/stream.view');
+    expect(stream.searchParams.get('format')).toBe('raw');
+    expect(stream.searchParams.has('estimateContentLength')).toBe(false);
+  });
+
+  it('asks for a content length on transcoded streams only', () => {
+    const opus = new URL(
+      buildStreamUrl(apiKeyServer, 'track1', { format: 'opus', maxBitRate: 128 }),
+    );
+    expect(opus.searchParams.get('format')).toBe('opus');
+    expect(opus.searchParams.get('maxBitRate')).toBe('128');
+    expect(opus.searchParams.get('estimateContentLength')).toBe('true');
+
+    const raw = new URL(buildStreamUrl(apiKeyServer, 'track1', { format: 'raw' }));
+    expect(raw.searchParams.has('estimateContentLength')).toBe(false);
   });
 
   it('uses download for originals and stream for transcoded downloads', () => {
@@ -103,5 +116,22 @@ describe('updatePlaylist params', () => {
   it('still omits other empty optional values', () => {
     const url = buildUrl(apiKeyServer, 'search3', { query: '', songCount: 20 });
     expect(new URL(url).searchParams.has('query')).toBe(false);
+  });
+
+  it('supports batch song id additions and index removals', () => {
+    const added = new URL(
+      buildUrl(apiKeyServer, 'updatePlaylist', {
+        playlistId: 'pl-1',
+        songIdToAdd: ['a', 'b', 'c'],
+      }),
+    );
+    expect(added.searchParams.getAll('songIdToAdd')).toEqual(['a', 'b', 'c']);
+    const removed = new URL(
+      buildUrl(apiKeyServer, 'updatePlaylist', {
+        playlistId: 'pl-1',
+        songIndexToRemove: [3, 1, 0],
+      }),
+    );
+    expect(removed.searchParams.getAll('songIndexToRemove')).toEqual(['3', '1', '0']);
   });
 });

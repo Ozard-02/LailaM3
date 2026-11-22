@@ -19,9 +19,6 @@ internal object PlaybackBridge {
 
   private val headers = ConcurrentHashMap<String, Map<String, String>>()
 
-  /** When true, the service pauses on a natural track change and lets JS decide. */
-  @Volatile var pauseOnAutoAdvance = false
-
   /** When set, next/previous from notification, lock screen or headset go to JS. */
   @Volatile var remoteListener: RemoteListener? = null
 
@@ -34,7 +31,6 @@ internal object PlaybackBridge {
 
   fun clear() {
     headers.clear()
-    pauseOnAutoAdvance = false
     remoteListener = null
   }
 

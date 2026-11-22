@@ -44,6 +44,31 @@ export function currentTrack(state: QueueState): Track | undefined {
   return state.queue[state.index];
 }
 
+/**
+ * Queue order as the listener perceives it: Up Next sits right after the
+ * current track. The audio engine mirrors this list so its native Next/Prev
+ * and auto-advance see the same successor that `advance` will pick.
+ *
+ * `advance` consumes `upNext[0]` by inserting it after the current index, so
+ * `effectiveQueue(state).tracks` equals
+ * `effectiveQueue(queueReducer(state, { type: 'advance' })).tracks` item for
+ * item while `index` moves forward by one.
+ */
+export function effectiveQueue(state: QueueState): { tracks: Track[]; index: number } {
+  if (state.queue.length === 0) return { tracks: [], index: -1 };
+  if (state.upNext.length === 0 || state.index < 0 || state.index >= state.queue.length) {
+    return { tracks: state.queue, index: state.index };
+  }
+  return {
+    tracks: [
+      ...state.queue.slice(0, state.index + 1),
+      ...state.upNext,
+      ...state.queue.slice(state.index + 1),
+    ],
+    index: state.index,
+  };
+}
+
 export type TrackPatch = Partial<Omit<Track, 'id'>> & { id: string };
 
 /**
@@ -278,11 +303,21 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       }
       const currentId = currentTrack(state)?.id;
       const index = indexOfId(action.queue, currentId);
+      let originalQueue: Track[] | null = null;
+      if (state.originalQueue) {
+        // `action.queue` is the shuffled order; replacing `originalQueue` with
+        // it would make unshuffle restore the shuffle. Keep the unshuffled
+        // order and only drop tracks that the reorder removed.
+        const remainingIds = new Set(action.queue.map((item) => item.id));
+        const filtered = state.originalQueue.filter((item) => remainingIds.has(item.id));
+        originalQueue =
+          filtered.length === state.originalQueue.length ? state.originalQueue : filtered;
+      }
       return {
         ...state,
         queue: action.queue,
         index: index >= 0 ? index : clampIndex(state.index, action.queue.length),
-        originalQueue: state.originalQueue ? action.queue : null,
+        originalQueue,
       };
     }
 

@@ -1,10 +1,14 @@
+import { resolveDuration } from '@/core/audio/duration';
 import type {
   AudioEngine,
   AudioListener,
   AudioRemoteHandlers,
+  AudioRepeatMode,
   AudioSource,
   AudioState,
   AudioStatus,
+  AutoAdvanceDecision,
+  AutoAdvanceTransition,
 } from '@/ports/audio';
 import {
   lailaPlayer,
@@ -61,7 +65,9 @@ export class NativeAudioEngine implements AudioEngine {
   private lastError: string | undefined;
   private pendingSeek: number | null = null;
   private remoteHandlers: AudioRemoteHandlers | null = null;
-  private autoAdvanceHandler: ((mediaId?: string) => void | Promise<void>) | null = null;
+  private autoAdvanceHandler:
+    | ((transition: AutoAdvanceTransition) => AutoAdvanceDecision)
+    | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
 
@@ -85,7 +91,9 @@ export class NativeAudioEngine implements AudioEngine {
     return {
       status: mapStatus(raw, error),
       position: raw.position,
-      duration: raw.duration,
+      // Transcodes report C.TIME_UNSET (0 here) until the decoder knows the
+      // length; the queue metadata is the better answer until then.
+      duration: resolveDuration(raw.duration, this.sources[this.lastIndex]?.duration),
       buffered: raw.buffered,
       error,
     };
@@ -104,13 +112,21 @@ export class NativeAudioEngine implements AudioEngine {
         this.flushPendingSeek();
         this.emit();
       }),
-      lailaPlayer.addListener('onAutoAdvance', ({ mediaId }) => {
-        const index = mediaId
+      lailaPlayer.addListener('onAutoAdvance', ({ mediaId, index, reason }) => {
+        const byId = mediaId
           ? this.sources.findIndex((source) => source.id === mediaId)
           : -1;
-        if (index >= 0) this.lastIndex = index;
+        const nativeIndex =
+          typeof index === 'number' && index >= 0 ? index : byId;
+        if (byId >= 0) this.lastIndex = byId;
         this.emit();
-        void this.autoAdvanceHandler?.(mediaId);
+        const decision =
+          this.autoAdvanceHandler?.({
+            mediaId,
+            index: nativeIndex >= 0 ? nativeIndex : undefined,
+            reason,
+          }) ?? 'keep';
+        if (decision === 'takeover') void lailaPlayer?.pause().catch(() => undefined);
       }),
       lailaPlayer.addListener('onRemoteNext', () => {
         void this.remoteHandlers?.next?.();
@@ -151,7 +167,6 @@ export class NativeAudioEngine implements AudioEngine {
     if (!this.setupPromise) {
       this.setupPromise = (async () => {
         await lailaPlayer.setup();
-        await lailaPlayer.setPauseOnAutoAdvance(true);
         await lailaPlayer.setRemoteHandling(true);
       })();
     }
@@ -195,6 +210,39 @@ export class NativeAudioEngine implements AudioEngine {
     this.emit();
   }
 
+  async syncQueue(sources: AudioSource[], activeIndex: number): Promise<void> {
+    await this.ensureSetup();
+    if (sources.length === 0) {
+      this.sources = [];
+      this.queueKey = '';
+      this.lastIndex = 0;
+      await this.nativePlayer.syncQueue([], -1);
+      this.emit();
+      return;
+    }
+    const index = Math.max(0, Math.min(activeIndex, sources.length - 1));
+    this.sources = sources;
+    this.queueKey = sourceKey(sources);
+    this.lastIndex = index;
+    await this.nativePlayer.syncQueue(sources.map(toQueueItem), index);
+    this.emit();
+  }
+
+  async skipToIndex(index: number, mediaId: string): Promise<boolean> {
+    await this.ensureSetup();
+    const skipped = await this.nativePlayer.skipToIndex(index, mediaId);
+    if (skipped) {
+      this.lastIndex = index;
+      this.emit();
+    }
+    return skipped;
+  }
+
+  async setRepeatMode(mode: AudioRepeatMode): Promise<void> {
+    await this.ensureSetup();
+    await this.nativePlayer.setRepeatMode(mode);
+  }
+
   async play(): Promise<void> {
     await this.ensureSetup();
     this.lastError = undefined;
@@ -226,7 +274,9 @@ export class NativeAudioEngine implements AudioEngine {
     return this.snapshot();
   }
 
-  setAutoAdvanceHandler(handler: (mediaId?: string) => void | Promise<void>): () => void {
+  setAutoAdvanceHandler(
+    handler: (transition: AutoAdvanceTransition) => AutoAdvanceDecision,
+  ): () => void {
     this.autoAdvanceHandler = handler;
     return () => {
       if (this.autoAdvanceHandler === handler) this.autoAdvanceHandler = null;

@@ -27,6 +27,8 @@ export interface DlnaPlayback {
 
 const AV_TRANSPORT = 'AVTransport';
 const RENDERING_CONTROL = 'RenderingControl';
+/** A powered-off renderer accepts the TCP connection but never answers. */
+const DLNA_TIMEOUT_MS = 5_000;
 
 function escapeXml(value: string): string {
   return value
@@ -116,20 +118,30 @@ async function sendSoap(
   action: string,
   params: Record<string, string | number>,
 ): Promise<string> {
-  const response = await fetch(controlUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/xml; charset="utf-8"',
-      SOAPACTION: `"urn:schemas-upnp-org:service:${service}:1#${action}"`,
-    },
-    body: buildSoapEnvelope(service, action, params),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    // Never include the control URL or the SOAP body: it carries credentials.
-    throw new Error(`DLNA ${action} failed (${response.status})`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DLNA_TIMEOUT_MS);
+  try {
+    const response = await fetch(controlUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/xml; charset="utf-8"',
+        SOAPACTION: `"urn:schemas-upnp-org:service:${service}:1#${action}"`,
+      },
+      body: buildSoapEnvelope(service, action, params),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      // Never include the control URL or the SOAP body: it carries credentials.
+      throw new Error(`DLNA ${action} failed (${response.status})`);
+    }
+    return text;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`DLNA ${action} timed out`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return text;
 }
 
 function tag(xml: string, name: string): string | undefined {
