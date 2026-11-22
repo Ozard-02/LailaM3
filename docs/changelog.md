@@ -5,6 +5,16 @@ Dated implementation history. Current status and priorities live in
 
 ## 2026-11-22
 
+Lyrics landscape alignment and cover swipe.
+
+- The lyrics cover, title, transport and progress now share one centred stack
+  inside the unchanged 38% cover column.
+- `MarqueeText` gained an opt-in `align="center"` for short titles; overflowing
+  titles still scroll from the start.
+- The lyrics cover now swipes to the previous/next track like the player cover,
+  clipped to its own stage so it never slides over the lyric column.
+- E2E covers the column centring, the 38% cap and the lyrics cover swipe.
+
 Public release updated with the non-plugin upstream work of 2026-11-13…22.
 
 ### Performance mode

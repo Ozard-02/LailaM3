@@ -19,6 +19,8 @@ export interface MarqueeTextProps {
   tone?: TextProps['tone'];
   style?: TextStyle;
   paused?: boolean;
+  /** Centre short text in the container; overflowing text still scrolls. */
+  align?: 'left' | 'center';
 }
 
 const GAP = 32;
@@ -34,6 +36,7 @@ export function MarqueeText({
   tone,
   style,
   paused = false,
+  align = 'left',
 }: MarqueeTextProps) {
   const theme = useTheme();
   const foreground = useUIStore((state) => state.foreground);
@@ -42,6 +45,8 @@ export function MarqueeText({
   const offset = useSharedValue(0);
   const textWidth = measurement.text === children ? measurement.width : 0;
   const overflow = Math.max(0, textWidth - containerWidth);
+  const scrolling = overflow > 0 && textWidth > 0;
+  const center = align === 'center' && !scrolling;
   const distance = textWidth + GAP;
   const scrollDuration = Math.min(18_000, Math.max(9_000, distance * 24));
   const initialPause = 4_500;
@@ -79,7 +84,13 @@ export function MarqueeText({
   if (theme.reduceMotion) {
     return (
       <View style={styles.container}>
-        <Text variant={variant} tone={tone} style={style} numberOfLines={1} ellipsizeMode="tail">
+        <Text
+          variant={variant}
+          tone={tone}
+          style={[style, center && styles.textCenter]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {children}
         </Text>
       </View>
@@ -94,6 +105,7 @@ export function MarqueeText({
       <Animated.View
         style={[
           styles.content,
+          center && styles.contentCenter,
           overflow > 0 && textWidth > 0 ? { width: distance + textWidth } : undefined,
           animatedStyle,
         ]}
@@ -101,7 +113,7 @@ export function MarqueeText({
         <Text
           variant={variant}
           tone={tone}
-          style={[style, styles.text, textWidth > 0 && overflow > 0 ? { width: textWidth } : undefined]}
+          style={[style, align === 'center' && styles.textCenter, styles.text, textWidth > 0 && overflow > 0 ? { width: textWidth } : undefined]}
           numberOfLines={1}
         >
           {children}
@@ -161,8 +173,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignSelf: 'flex-start',
   },
+  contentCenter: {
+    alignSelf: 'center',
+  },
   text: {
     flexShrink: 0,
+  },
+  textCenter: {
+    textAlign: 'center',
   },
   measure: {
     position: 'absolute',

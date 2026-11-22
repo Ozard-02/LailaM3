@@ -881,6 +881,67 @@ test.describe('Laila web app', () => {
     expect(Math.abs(delta as number)).toBeLessThan(12);
   });
 
+  test('centres the lyrics cover and transport in their column', async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 0) < 900, 'wide layout only');
+    await login(page);
+    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await page.getByRole('button', { name: /Now playing: First Light/ }).click();
+    await page.getByRole('button', { name: /Album cover: tap for lyrics/ }).click();
+    await expect(page.getByText('Synced lyrics')).toBeVisible();
+
+    const box = async (testId: string) => {
+      const rect = await page.getByTestId(testId).boundingBox();
+      expect(rect).not.toBeNull();
+      return rect!;
+    };
+    const centre = (rect: { x: number; width: number }) => rect.x + rect.width / 2;
+    const coverColumn = await box('lyrics-cover-column');
+    const lyricsColumn = await box('lyrics-column');
+    const art = await box('lyrics-artwork');
+    const title = await box('lyrics-title');
+    const transport = await box('lyrics-transport');
+    const progress = await box('lyrics-progress');
+
+    // The whole cover stack sits on the column's centre line, not its edge.
+    expect(Math.abs(centre(art) - centre(coverColumn))).toBeLessThan(2);
+    expect(Math.abs(centre(title) - centre(coverColumn))).toBeLessThan(2);
+    expect(Math.abs(centre(transport) - centre(coverColumn))).toBeLessThan(2);
+    expect(Math.abs(centre(progress) - centre(coverColumn))).toBeLessThan(2);
+
+    // The cover column keeps the original 38% width capped at 360.
+    const viewport = page.viewportSize()!;
+    const content = viewport.width - 48;
+    expect(Math.abs(coverColumn.width - Math.min(content * 0.38, 360))).toBeLessThan(2);
+
+    const lyricLine = await page.getByRole('button', { name: 'Seek to Lyric line 1' }).boundingBox();
+    expect(lyricLine).not.toBeNull();
+    if (!lyricLine) return;
+    expect(Math.abs(centre(lyricLine) - centre(lyricsColumn))).toBeLessThan(4);
+  });
+
+  test('swipes tracks from the lyrics cover on a wide layout', async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 0) < 900, 'wide layout only');
+    await login(page);
+    await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await page.getByRole('button', { name: /Now playing: First Light/ }).click();
+    await page.getByRole('button', { name: /Album cover: tap for lyrics/ }).click();
+    await expect(page.getByText('Synced lyrics')).toBeVisible();
+
+    const art = await page.getByTestId('lyrics-artwork').boundingBox();
+    expect(art).not.toBeNull();
+    if (!art) return;
+    const y = art.y + art.height / 2;
+    await page.mouse.move(art.x + art.width * 0.8, y);
+    await page.mouse.down();
+    await page.mouse.move(art.x + art.width * 0.1, y, { steps: 12 });
+    await page.mouse.up();
+
+    await expect(page.getByRole('heading', { name: 'Slow Motion' }).first()).toBeVisible();
+    await expect(page.getByText('Synced lyrics')).toBeVisible();
+  });
+
   test('closing the player animates instead of snapping shut', async ({ page }) => {
     await login(page);
     await page.getByRole('button', { name: /A Quiet Place by/ }).first().click();

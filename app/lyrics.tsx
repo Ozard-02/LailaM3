@@ -9,6 +9,7 @@ import {
 } from '@/ui/icons';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -22,6 +23,7 @@ import { useCurrentTrack, usePlayerStore } from '@/stores/player';
 import { useTheme } from '@/theme/ThemeProvider';
 import { MarqueeText } from '@/components/MarqueeText';
 import { PlaybackProgress } from '@/components/PlaybackProgress';
+import { useCoverSwipe } from '@/components/useCoverSwipe';
 import { Artwork } from '@/ui/Artwork';
 import { EmptyState } from '@/ui/EmptyState';
 import { IconButton } from '@/ui/IconButton';
@@ -43,6 +45,15 @@ export default function LyricsScreen() {
   const previous = usePlayerStore((state) => state.previous);
   const lyrics = useLyrics();
   const [headerHeight, setHeaderHeight] = useState(0);
+  const artSize = Math.max(104, Math.min(width * 0.26, height * 0.36));
+  const { gesture: coverGesture, swipeX } = useCoverSwipe({
+    distance: artSize,
+    coverSize: artSize,
+    enabled: landscape,
+  });
+  const coverStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: swipeX.get() }],
+  }));
 
   // This route can be pushed from the player after its dialog has parked.
   // Move keyboard focus into the new screen instead of leaving it on the
@@ -55,22 +66,40 @@ export default function LyricsScreen() {
     return () => window.clearTimeout(timer);
   }, []);
   const landscapeLeft = track ? (
-    <View style={styles.landscapeLeft}>
-      <Artwork
-        coverArt={track.coverArt}
-        size={Math.max(104, Math.min(width * 0.26, height * 0.36))}
-        radius={theme.radius.md}
-        style={styles.landscapeCover}
-      />
+    <View testID="lyrics-cover-column" style={styles.landscapeLeft}>
+      <View
+        testID="lyrics-artwork"
+        style={[
+          styles.landscapeCoverStage,
+          { width: artSize, height: artSize, borderRadius: theme.radius.md },
+        ]}
+      >
+        <GestureDetector gesture={coverGesture}>
+          <Animated.View style={coverStyle}>
+            <Artwork
+              coverArt={track.coverArt}
+              size={artSize}
+              radius={theme.radius.md}
+            />
+          </Animated.View>
+        </GestureDetector>
+      </View>
       {!shortLandscape ? (
-        <View style={styles.landscapeText}>
-          <MarqueeText variant="title">{track.title}</MarqueeText>
-          <Text variant="caption" tone="secondary" numberOfLines={1}>
+        <View testID="lyrics-title" style={[styles.landscapeText, { width: artSize }]}>
+          <MarqueeText variant="title" align="center">
+            {track.title}
+          </MarqueeText>
+          <Text
+            variant="caption"
+            tone="secondary"
+            numberOfLines={1}
+            style={styles.landscapeArtist}
+          >
             {track.artist ?? 'Unknown artist'}
           </Text>
         </View>
       ) : null}
-      <View style={styles.landscapeControls}>
+      <View testID="lyrics-transport" style={styles.landscapeControls}>
         <IconButton label="Previous track" size={42} onPress={() => void previous()}>
           <SkipBack size={20} color={theme.colors.text} fill={theme.colors.text} />
         </IconButton>
@@ -90,7 +119,7 @@ export default function LyricsScreen() {
           <SkipForward size={20} color={theme.colors.text} fill={theme.colors.text} />
         </IconButton>
       </View>
-      <View style={styles.landscapeProgress}>
+      <View testID="lyrics-progress" style={[styles.landscapeProgress, { width: artSize }]}>
         <PlaybackProgress label="Playback position" />
       </View>
     </View>
@@ -147,7 +176,7 @@ export default function LyricsScreen() {
       ) : landscape && landscapeLeft ? (
         <View style={[styles.landscape, shortLandscape && styles.landscapeShort]}>
           {landscapeLeft}
-          <View style={styles.landscapeRight}>
+          <View testID="lyrics-column" style={styles.landscapeRight}>
             <LyricsBody data={lyrics.data} landscape={landscape} topOffset={headerHeight} />
           </View>
         </View>
@@ -414,14 +443,18 @@ const styles = StyleSheet.create({
   landscapeLeft: {
     width: '38%',
     maxWidth: 360,
+    alignItems: 'center',
     justifyContent: 'center',
     gap: 16,
   },
-  landscapeCover: {
-    alignSelf: 'center',
+  landscapeCoverStage: {
+    overflow: 'hidden',
   },
   landscapeText: {
     gap: 4,
+  },
+  landscapeArtist: {
+    textAlign: 'center',
   },
   landscapeControls: {
     flexDirection: 'row',
