@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import {
   Cast,
   Check,
+  ChevronDown,
   ChevronRight,
   Download,
   Info,
@@ -111,22 +112,54 @@ function Row({
 function Section({
   title,
   icon: Icon,
+  open,
+  onToggle,
+  summary,
   children,
 }: {
   title: string;
   icon: React.ComponentType<{ size?: number; color?: string }>;
+  open: boolean;
+  onToggle: () => void;
+  summary?: string;
   children: React.ReactNode;
 }) {
   const theme = useTheme();
   return (
     <View style={[styles.section, { borderLeftColor: theme.colors.accent }]}>
-      <View style={styles.sectionHeader}>
-        <Icon size={15} color={theme.colors.accent} />
-        <Text variant="label" tone="accent">
-          {title.toUpperCase()}
-        </Text>
-      </View>
-      {children}
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        aria-expanded={open}
+        accessibilityLabel={`${title} section`}
+        accessibilityHint={open ? 'Collapse section' : 'Expand section'}
+        haptic={false}
+        onPress={onToggle}
+        style={styles.sectionHeader}
+      >
+        <View style={styles.sectionHeaderMain}>
+          <Icon size={15} color={theme.colors.accent} />
+          <Text variant="label" tone="accent">
+            {title.toUpperCase()}
+          </Text>
+        </View>
+        {!open && summary ? (
+          <Text
+            variant="caption"
+            tone="tertiary"
+            numberOfLines={1}
+            style={styles.sectionSummary}
+          >
+            {summary}
+          </Text>
+        ) : null}
+        {open ? (
+          <ChevronDown size={16} color={theme.colors.textTertiary} />
+        ) : (
+          <ChevronRight size={16} color={theme.colors.textTertiary} />
+        )}
+      </PressableScale>
+      {open ? <View style={styles.sectionBody}>{children}</View> : null}
     </View>
   );
 }
@@ -139,6 +172,16 @@ export default function SettingsScreen() {
     'idle',
   );
   const [trashOpen, setTrashOpen] = useState(false);
+  const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
+  // Keep the familiar all-open page by default; collapsing is an opt-in way to
+  // shorten it. This also keeps every control reachable on small screens.
+  const sectionOpen = (id: string) => sectionOverrides[id] ?? true;
+  const toggleSection = (id: string) => {
+    setSectionOverrides((current) => ({
+      ...current,
+      [id]: !(current[id] ?? true),
+    }));
+  };
 
   const refreshExclusions = async () => {
     if (!server || exclusionState === 'loading') return;
@@ -186,6 +229,32 @@ export default function SettingsScreen() {
   const [hexInput, setHexInput] = useState(accentColor ?? '');
   const [hexError, setHexError] = useState<string | null>(null);
 
+  const qualityLabel = QUALITIES.find((item) => item.value === quality)?.label ?? quality;
+  const downloadQualityLabel =
+    DOWNLOAD_QUALITIES.find((item) => item.value === downloadQuality)?.label ??
+    downloadQuality;
+  const offlineLimitLabel =
+    OFFLINE_LIMITS.find((item) => item.value === offlineLimitBytes)?.label ?? 'Off';
+  const shapeLabel =
+    CHROME_SHAPES.find((item) => item.value === chromeRadius)?.label ?? chromeRadius;
+  const accentLabel = accentColor
+    ? ACCENT_PRESETS.find((preset) => preset.value === accentColor)?.name ?? 'Custom'
+    : 'Artwork';
+  const swipeLeftLabel =
+    SWIPE_ACTIONS.find((action) => action.value === swipeLeftAction)?.label ?? 'None';
+  const swipeRightLabel =
+    SWIPE_ACTIONS.find((action) => action.value === swipeRightAction)?.label ?? 'None';
+  const accountSummary = server
+    ? `${new URL(server.url).host}${server.username ? ` · ${server.username}` : ''}`
+    : 'Not connected';
+  const playbackSummary = `${qualityLabel} · radio ${continueWithRadio ? 'on' : 'off'}`;
+  const downloadsSummary = `${downloadQualityLabel} · ${parallelDownloads} parallel · ${offlineLimitLabel}`;
+  const appearanceSummary = `${shapeLabel} · ${accentLabel}`;
+  const gesturesSummary = `${swipeLeftLabel} / ${swipeRightLabel}${
+    trashPlaylistName ? ` · ${trashPlaylistName}` : ''
+  }`;
+  const aboutSummary = 'Laila 0.1.0';
+
   const chooseAccent = (color: string | null) => {
     setAccentColor(color);
     setHexInput(color ?? '');
@@ -206,7 +275,13 @@ export default function SettingsScreen() {
 
   return (
     <Screen title="Settings" subtitle="Server, sound and local data.">
-      <Section title="Account" icon={Server}>
+      <Section
+        title="Account"
+        icon={Server}
+        open={sectionOpen('account')}
+        onToggle={() => toggleSection('account')}
+        summary={accountSummary}
+      >
         <Surface style={styles.card} bordered>
           <Row
             icon={<Server size={18} color={theme.colors.textSecondary} />}
@@ -276,7 +351,13 @@ export default function SettingsScreen() {
       </Surface>
       </Section>
 
-      <Section title="Playback" icon={SlidersHorizontal}>
+      <Section
+        title="Playback"
+        icon={SlidersHorizontal}
+        open={sectionOpen('playback')}
+        onToggle={() => toggleSection('playback')}
+        summary={playbackSummary}
+      >
         <Surface style={styles.card} bordered>
           <View style={styles.cardHeader}>
             <Radio size={18} color={theme.colors.accent} />
@@ -347,15 +428,16 @@ export default function SettingsScreen() {
             value={showCodecBadge ? 'On' : 'Off'}
             onPress={toggleCodecBadge}
           />
-          <Row
-            label="Reduce blur effects"
-            value={reduceBlur ? 'On' : 'Off'}
-            onPress={toggleReduceBlur}
-          />
         </Surface>
       </Section>
 
-      <Section title="Downloads" icon={Download}>
+      <Section
+        title="Downloads"
+        icon={Download}
+        open={sectionOpen('downloads')}
+        onToggle={() => toggleSection('downloads')}
+        summary={downloadsSummary}
+      >
         <Surface style={styles.card} bordered>
           <Row
             icon={<Download size={18} color={theme.colors.textSecondary} />}
@@ -418,7 +500,13 @@ export default function SettingsScreen() {
         </Surface>
       </Section>
 
-      <Section title="Appearance" icon={Palette}>
+      <Section
+        title="Appearance"
+        icon={Palette}
+        open={sectionOpen('appearance')}
+        onToggle={() => toggleSection('appearance')}
+        summary={appearanceSummary}
+      >
 
       <Surface style={styles.card} bordered>
         <Text variant="headline">Player and tab shape</Text>
@@ -435,6 +523,14 @@ export default function SettingsScreen() {
             />
           ))}
         </View>
+      </Surface>
+
+      <Surface style={styles.card} bordered>
+        <Row
+          label="Reduce blur effects"
+          value={reduceBlur ? 'On' : 'Off'}
+          onPress={toggleReduceBlur}
+        />
       </Surface>
 
       <Surface style={styles.card} bordered>
@@ -492,7 +588,13 @@ export default function SettingsScreen() {
 
       </Section>
 
-      <Section title="Library & queue" icon={Shuffle}>
+      <Section
+        title="Gestures & queue"
+        icon={Shuffle}
+        open={sectionOpen('gestures')}
+        onToggle={() => toggleSection('gestures')}
+        summary={gesturesSummary}
+      >
 
       <Surface style={styles.card} bordered>
         <Text variant="headline">Swipe actions on tracks</Text>
@@ -531,7 +633,13 @@ export default function SettingsScreen() {
 
       </Section>
 
-      <Section title="About" icon={Keyboard}>
+      <Section
+        title="About"
+        icon={Keyboard}
+        open={sectionOpen('about')}
+        onToggle={() => toggleSection('about')}
+        summary={aboutSummary}
+      >
         <Surface style={styles.card} bordered>
           <Row
             icon={<Keyboard size={18} color={theme.colors.textSecondary} />}
@@ -619,6 +727,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingLeft: 2,
+    minHeight: 44,
+    paddingVertical: 4,
+  },
+  sectionHeaderMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  sectionSummary: {
+    flex: 1,
+    textAlign: 'right',
+  },
+  sectionBody: {
+    gap: 12,
   },
   cardHeader: {
     flexDirection: 'row',
