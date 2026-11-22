@@ -44,7 +44,7 @@ jobs:
       - name: Installa SDK e NDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
 
       - name: Installa dipendenze
         run: npm ci
